@@ -896,7 +896,632 @@ ES库设计，同步，全文模糊搜索。
 
 
 
+## Day 6
 
+> 今日计划
+
+批处理。 开发模板编写。 JUC八股。 java基础八股 java集合，mysql、spring。
+
+### 批量处理
+
+**批处理（Batch Processing）** 是指一次性处理**大量数据**的操作方式，通常用于 **插入、更新、删除、迁移、导出** 等大规模数据操作。 
+
+解决的问题就是**性能问题**(save 和savebatch).
+
+批处理可能出现的问题：
+
+* **长事务的问题**。解决对操作进行合适的分批+多线程。
+* OOM问题。 解决就是分批。
+
+> 批处理解决性能问题
+
+
+ **1. 批处理 vs. 逐条处理**
+
+| 描述                                                      | 处理方式     | 优势                       | 劣势                 |
+| --------------------------------------------------------- | ------------ | -------------------------- | -------------------- |
+| 每次执行一条 SQL 语句                                     | **逐条处理** | **逻辑简单**，适合小数据量 | **慢**，数据库压力大 |
+| 一次性处理多条数据（例如 `INSERT INTO ... VALUES (...)`） | **批处理**   | **效率高，减少数据库交互** | 适用于**大数据量**   |
+
+ **示例**
+
++ 逐条插入（慢）
+
+  ```java
+  for (Order order : orderList) {
+      orderService.save(order); // 每次都执行一次 SQL
+  }
+  ```
+
++ 批量插入（快）
+
+  ```java
+  orderService.saveBatch(orderList, 1000); // 每次插入 1000 条
+  ```
+
+------
+
+ **2. 批处理的优势**
+✅ **减少网络开销**：一次性提交多个 SQL 语句，减少数据库与应用之间的通信时间。
+
+✅**减少数据库磁盘 I/O 开销**：一次性处理多条数据，减少 SQL 语句执行次数。
+
+> 长事务问题
+
+批量操作中，一次性处理过多数据会导致事务过长，影响数据库性能。可以通过 分批处理 来避免长事务问题，确保部分数据异常不会影响整个批次的数据保存。
+
+假设操作 10w 条数据，其中有 1 条数据操作异常，如果是长事务，那么修改的 10w 条数据都需要回滚，而分批事务仅需回滚一批既可，降低长事务带来的资源消耗，同时也提升了稳定性。
+
+ **资源占用高**：数据库**长时间占用锁、连接、CPU、内存**，影响并发性能。
+**❌ 数据库死锁**：多个长事务同时执行，可能造成**锁等待或死锁**，导致数据库崩溃。
+**❌ 回滚成本高**：事务持续时间越长，回滚代价越高，**影响数据库响应速度**。
+**❌ 影响数据库吞吐量**：长事务会阻塞其他请求，**降低数据库吞吐能力**。
+
+> OOM问题
+
+一次性加载大量数据，可能导致**内存溢出（Out of Memory，OOM）**。
+
+例如：一次性查询 1000 万条数据进行计算，导致 JVM 堆内存不足。
+
+> 如何实现一个批量添加题目向题库的接口
+
+单个处理
+
+题库 id   题目id     题库题目关系
+
+向题库中添加题目，就是添加一条题库题目关系。所以参数就是（questionBankId, List<Long>questionid）
+
+直接对questionIdList for循环，每次生成一个题目题库关系加入到数据库中。
+
+```java
+    for (Long questionId : QuestionIdList) {
+        QuestionBankQuestion questionBankQuestion = new QuestionBankQuestion();
+        questionBankQuestion.setQuestionBankId(questionBankId);
+        questionBankQuestion.setQuestionId(questionId);
+        questionBankQuestion.setUserId(loginUser.getId());
+        boolean result = this.save(questionBankQuestion);
+        if (!result) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "向题库添加题目失败");
+        }
+    }
+```
+
+单个处理的问题就是。每次执行sql只能插入一条数据，但是每次都会发网络请求连接mysql数据库，以及每次操作都对数据库IO操作。新性能低。
+
+批量处理
+
+```java
+// 组装数据
+  List<QuestionBankQuestion> questionBankQuestions = questionidList.stream().map(questionId -> {
+        QuestionBankQuestion questionBankQuestion = new QuestionBankQuestion();
+        questionBankQuestion.setQuestionBankId(questionBankId);
+        questionBankQuestion.setQuestionId(questionId);
+        return questionBankQuestion;
+    }).collect(Collectors.toList());
+ boolean result = this.saveBatch(questionBankQuestions);
+        //如果失败
+        if (!result) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "向题库添加题目失败");
+        }
+```
+
+可能出现的问题： OOM 和长事务问题。
+
+分批操作
+
+```java
+// 分批处理避免长事务，假设每次处理 1000 条数据
+int batchSize = 1000;
+int totalQuestionListSize = validQuestionIdList.size();
+for (int i = 0; i < totalQuestionListSize; i += batchSize) {
+    // 生成每批次的数据
+    List<Long> subList = validQuestionIdList.subList(i, Math.min(i + batchSize, totalQuestionListSize));
+    List<QuestionBankQuestion> questionBankQuestions = subList.stream().map(questionId -> {
+        QuestionBankQuestion questionBankQuestion = new QuestionBankQuestion();
+        questionBankQuestion.setQuestionBankId(questionBankId);
+        questionBankQuestion.setQuestionId(questionId);
+        questionBankQuestion.setUserId(loginUser.getId());
+        return questionBankQuestion;
+    }).collect(Collectors.toList());
+    // 使用事务处理每批数据
+    QuestionBankQuestionService questionBankQuestionService = (QuestionBankQuestionServiceImpl) AopContext.currentProxy();
+    questionBankQuestionService.batchAddQuestionsToBankInner(questionBankQuestions);
+}
+
+```
+
+整体的参考demo
+
+```java
+/**
+     * 批量向题库添加题目
+     * @param questionBankQuestionBatchAddRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/add/batch")
+    public BaseResponse<Boolean> addQuestionToBankByIdList(@RequestBody QuestionBankQuestionBatchAddRequest questionBankQuestionBatchAddRequest, HttpServletRequest request) {
+        ThrowUtils.throwIf(questionBankQuestionBatchAddRequest == null, ErrorCode.PARAMS_ERROR);
+
+        Long questionBankId = questionBankQuestionBatchAddRequest.getQuestionBankId();
+        List<Long> questionIdList = questionBankQuestionBatchAddRequest.getQuestionIdList();
+        User loginUser = userService.getLoginUser(request);
+
+        //校验
+        ThrowUtils.throwIf(loginUser == null, ErrorCode.NOT_LOGIN_ERROR);
+
+        questionBankQuestionService.addQuestionToQuestionBankByIdList(questionIdList, questionBankId, loginUser);
+        return ResultUtils.success(true);
+    }
+
+
+
+ /**
+     * 通过题目id集合批量加入到题库
+     * @param questionIdList
+     * @param questionBankId
+     * @param user
+     */
+    void addQuestionToQuestionBankByIdList(List<Long> questionIdList, long questionBankId, User user);
+
+ /**
+     * 通过题目id集合批量加入到题库
+     *
+     * @param questionIdList
+     * @param questionBankId
+     * @param user
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void addQuestionToQuestionBankByIdList(List<Long> questionIdList, long questionBankId, User user) {
+        // 逻辑校验参数
+        ThrowUtils.throwIf(questionIdList == null, ErrorCode.NOT_FOUND_ERROR, "题目id集合不能为空");
+        ThrowUtils.throwIf(questionBankId <= 0, ErrorCode.NOT_FOUND_ERROR, "题库id不能为空");
+        ThrowUtils.throwIf(user == null, ErrorCode.NOT_FOUND_ERROR, "用户不能为空");
+
+        // 业务校验参数
+        //校验题目id集合
+//        List<Question> questions = questionService.listByIds(questionIdList); --->优化sql
+        //合法的题目id列表
+//        List<Long> idList = questions.stream()
+//                .map(Question::getId)
+//                .collect(Collectors.toList());
+
+        //优化sql
+        LambdaQueryWrapper<Question> queryWrapper = Wrappers.lambdaQuery(Question.class)
+                .select(Question::getId)
+                .in(Question::getId, questionIdList);
+        List<Long> idList = questionService.listObjs(queryWrapper, obj -> (Long) obj);
+
+
+        ThrowUtils.throwIf(idList.isEmpty(), ErrorCode.NOT_FOUND_ERROR, "题目id集合不能为空");
+
+        //校验题库id
+        QuestionBank questionBank = questionBankService.getById(questionBankId);
+        ThrowUtils.throwIf(questionBank == null, ErrorCode.NOT_FOUND_ERROR, "题库不存在");
+
+        //校验题目id集合是否在题库中-->取出来不在题库中的id,避免重复插入
+        LambdaQueryWrapper<QuestionBankQuestion> queryWrapper1 = new LambdaQueryWrapper<>();
+        queryWrapper1.in(QuestionBankQuestion::getQuestionId, idList)
+                .eq(QuestionBankQuestion::getQuestionBankId, questionBankId)
+                .select(QuestionBankQuestion::getQuestionId);
+        //查询已经题库中的题目
+        List<Long> existQuestionIdList = this.listObjs(queryWrapper1, obj -> (Long) obj);
+        // 未存在的的关系，插入
+        List<Long> validQuestionIdList = idList.stream()
+                .filter(questionId -> {
+                    return !existQuestionIdList.contains(questionId);
+                }).collect(Collectors.toList());
+
+        ThrowUtils.throwIf(validQuestionIdList.isEmpty(), ErrorCode.NOT_FOUND_ERROR, "已经全部添加到题库中");
+
+
+
+        //线程池
+        ThreadPoolExecutor customExecutor = new ThreadPoolExecutor(
+                20,// 核心线程数
+                30,// 最大线程数
+                60,// 线程空闲时间
+                TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(1000),  // 阻塞队列容量
+                new ThreadPoolExecutor.CallerRunsPolicy()//拒绝策略：由调用线程处理任务
+        );
+
+        // 保存所有批次的CompletableFuture
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+
+
+        //批量插入---》分批--->>多线程处理
+        //    假如1000数据为一批
+        int batchSize = 2;
+        int totalSize = validQuestionIdList.size();
+        for (int i = 0; i < validQuestionIdList.size(); i += batchSize) {
+            int endIndex = Math.min(i + batchSize, totalSize);
+            //分批
+            List<Long> subList = validQuestionIdList.subList(i, endIndex);
+            //调用内部方法：事务会失效---》AOPContex拿到代理
+            QuestionBankQuestionService questionBankQuestionService = (QuestionBankQuestionServiceImpl) AopContext.currentProxy();
+            //多线程处理
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+
+                questionBankQuestionService.batchAddQuestionToQuestionBankInner(subList, questionBankId, user);
+            },customExecutor).exceptionally(ex ->{
+                log.error("批量添加题目到题库异常", ex);
+                return null;
+            });
+            futures.add(future);
+        }
+
+        // 等待所有任务完成
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        //关闭线程池
+        customExecutor.shutdown();
+
+////        批量插入
+//        for (Long questionId : validQuestionIdList) {
+//            QuestionBankQuestion questionBankQuestion = new QuestionBankQuestion();
+//            questionBankQuestion.setQuestionBankId(questionBankId);
+//            questionBankQuestion.setQuestionId(questionId);
+//            questionBankQuestion.setUserId(user.getId());
+//                boolean result = this.save(questionBankQuestion);
+//                //如果失败
+//                if (!result) {
+//                    throw  new BusinessException(ErrorCode.OPERATION_ERROR,"向题库添加题目失败");
+//                }
+//            }
+
+
+    }
+
+    /**
+     * 通过题目id集合批量加入-->内部调用  事务
+     *
+     * @param questionIdList
+     * @param questionBankId
+     * @param user
+     */
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void batchAddQuestionToQuestionBankInner(List<Long> questionIdList, long questionBankId, User user) {
+
+
+        ArrayList<QuestionBankQuestion> questionBankQuestions = new ArrayList<>();
+        //批量插入
+        for (Long questionId : questionIdList) {
+            QuestionBankQuestion questionBankQuestion = new QuestionBankQuestion();
+            questionBankQuestion.setQuestionBankId(questionBankId);
+            questionBankQuestion.setQuestionId(questionId);
+            questionBankQuestion.setUserId(user.getId());
+            questionBankQuestions.add(questionBankQuestion);
+        }
+        boolean result = this.saveBatch(questionBankQuestions);
+        //如果失败
+        if (!result) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "向题库添加题目失败");
+        }
+    }
+
+
+```
+
+注意，使用 `AopContext.currentProxy()` 方法时必须要在启动类添加下面的注解开启切面自动代理：
+
+```java
+@EnableAspectJAutoProxy(proxyTargetClass = true, exposeProxy = true)
+```
+
+
+
+
+
+### JUC
+
+
+
+
+
+### 每日挑选
+
+
+
+
+
+### Druid
+
+数据库连接池（Database Connection Pool）是为了提高数据库访问效率而使用的一种技术。它通过**预先创建一定数量的数据库连接，并将它们维护在池中，避免每次进行数据库操作时都要创建和销毁连接**。这样可以显著提高性能，减少连接建立和销毁的开销，优化系统资源的使用。
+
+常见的数据库连接池有 2 种：
+
+* **HikariCP**
+* **Druid**
+
+ **1. 性能**
+
++ **HikariCP**：
+  + **高性能**是 HikariCP 的最大特点。它是目前性能表现最好的连接池之一，尤其适用于对性能要求较高的应用场景（如高并发、低延迟的系统）。
+  + 它的设计精简、内存占用小，通过优化连接池管理、减少不必要的开销，保证了高效的连接管理。
+  + 在 **大并发、高负载** 场景下，HikariCP 的性能优势尤其明显。
++ **Druid**：
+  + Druid 相较于 HikariCP 具有更多的功能，但在性能上略逊色一些。它在功能性和灵活性上有所侧重，因此性能可能略低于 HikariCP，尤其在 **超高并发** 环境下。
+  + Druid 适用于 **对监控和扩展性** 有较高需求的场景。
+
+**总结**：如果你的应用场景对性能要求非常高，特别是在高并发时，**HikariCP** 会是更好的选择。Druid 在一些场景下性能可能不如 HikariCP，但它提供了更多的功能和灵活性。
+
+------
+
+**2. 功能**
+
++ **HikariCP**：
+  + HikariCP 的设计理念是“简单、快速”，它聚焦于连接池的基础功能，提供了最基本的连接池管理功能，如最大连接数、最小空闲连接数、连接超时等配置。
+  + HikariCP 并没有很多高级的功能，诸如监控、统计等都比较简洁。
++ **Druid**：
+  + Druid 提供了更丰富的功能，特别是在 **监控、统计** 和 **扩展性** 方面。Druid 内置了非常强大的监控功能，可以非常方便地查看连接池的健康状况、数据库访问的情况。
+  + 支持 **SQL 执行日志** 和 **慢查询日志**，可以实时查看数据库执行情况。
+  + 还支持一些高级的功能，比如 **防止 SQL 注入、连接泄漏检测** 等。
+
+**总结**：如果你的应用需要更丰富的监控、统计功能，或者需要对连接池的运行状态进行详细的追踪和分析，**Druid** 更适合。如果你的需求仅仅是快速、稳定的连接池管理，**HikariCP** 更轻便高效。
+
+------
+
+ **3. 配置简便性**
+
++ **HikariCP**：
+  + 配置相对简单、直接。只需要设置一些核心参数，如 `maximumPoolSize`（最大连接数）、`minimumIdle`（最小空闲连接数）、`connectionTimeout`（连接超时）等。
+  + 由于它的功能聚焦，因此配置项不复杂，能够快速上手。
++ **Druid**：
+  + 配置较为复杂，支持更多的自定义项，尤其是在连接池监控、日志记录和防止连接泄漏等方面提供了许多参数。需要根据具体需求来调整相关配置。
+  + 对于复杂的系统，可能需要更多的配置和调优。
+
+**总结**：如果你需要简单、直观的配置，**HikariCP** 更加适合；如果你需要更多的功能和调优选项，**Druid** 会更灵活一些。
+
+------
+
+1）HikariCP：被认为是市场上最快的数据库连接池之一，具有非常低的延迟和高效的性能。它以其轻量级和简洁的设计闻名，占用较少的内存和 CPU 资源。
+
+Spring Boot 2.x 版本及以上默认使用 HikariCP 作为数据库连接池。默认 HikariCP 连接池大小是 10
+
+2）[Druid](https://github.com/alibaba/druid)：由阿里巴巴开发的开源数据库连接池，提供了**丰富的监控和管理功能**，包括 SQL 分析、性能监控和慢查询日志等。适合需要深度定制和监控的企业级应用。
+
+**4.使用**
+
+1）**HikariCP**
+
+Spring Boot 默认使用 HikariCP 作为数据库连接池实现。只要你配置好数据库连接信息，Spring Boot 会自动集成 HikariCP。
+
+1. 依赖引入
+
+需要引入HiKariCP依赖，和数据库驱动依赖。
+
+HiKariCP依赖，一般orm框架都有。比如mybtis。
+
+```java
+<dependencies>
+    
+    <!-- Spring Boot Starter Data JPA, 包含了 HikariCP -->
+    <!--        <dependency>-->
+<!--            <groupId>org.springframework.boot</groupId>-->
+<!--            <artifactId>spring-boot-starter-data-jpa</artifactId>-->
+<!--        </dependency>-->
+    
+        <!-- Spring Boot Starter JDBC (用于数据库访问) -->
+<!--        <dependency>-->
+<!--            <groupId>org.springframework.boot</groupId>-->
+<!--            <artifactId>spring-boot-starter-jdbc</artifactId>-->
+<!--        </dependency>-->
+    
+    
+     <!-- mybtis-plus 包含了 HikariCP -->
+    <dependency>
+    <groupId>com.baomidou</groupId>
+    <artifactId>mybatis-plus-boot-starter</artifactId>
+</dependency>
+
+    <!-- MySQL 驱动 -->
+    <dependency>
+        <groupId>mysql</groupId>
+        <artifactId>mysql-connector-java</artifactId>
+    </dependency>
+</dependencies>
+
+```
+
+2. 配置
+
+只需要编写配置，即可自动创建. 配置比较简单。核心的也就是线程池核心的参数。
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/mydb
+    username: root
+    password: password
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+    hikari:
+      maximum-pool-size: 10            # 最大连接数 默认
+      minimum-idle: 5                  # 最小空闲连接数
+      idle-timeout: 30000              # 连接最大空闲时间（毫秒）
+      connection-timeout: 30000        # 获取连接的最大等待时间（毫秒）
+      max-lifetime: 1800000            # 连接的最大生命周期（毫秒）
+      pool-name: HikariPool            # 连接池名称
+      validation-timeout: 5000         # 连接验证超时时间（毫秒）
+      leak-detection-threshold: 2000   # 连接泄漏检测阈值（毫秒）
+
+```
+
+其实不配置hikari也行。 有默认参数。最大线程数默认是10。
+
+2）**Druid**
+
+提供了更丰富的功能，比如监控。可以查看慢sql，以及线程执行的情况。
+
+1. 引入依赖
+
+```xml
+<dependencies>
+    <!-- Spring Boot Starter JDBC (用于数据库访问) -->
+    <!-- 大多数情况下不用单独引入，因为通常引入mybatis 就包含这个了-->
+<!--        <dependency>-->
+<!--            <groupId>org.springframework.boot</groupId>-->
+<!--            <artifactId>spring-boot-starter-jdbc</artifactId>-->
+<!--        </dependency>-->
+
+    <!-- Druid 连接池依赖 -->
+    <dependency>
+        <groupId>com.alibaba</groupId>
+        <artifactId>druid-spring-boot-starter</artifactId>
+    </dependency>
+    
+      <!-- MySQL 驱动 -->
+    <dependency>
+        <groupId>mysql</groupId>
+        <artifactId>mysql-connector-java</artifactId>
+    </dependency>
+</dependencies>
+
+```
+
+2. 配置
+
+```yaml
+spring:
+  # 数据源配置
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/mianshiya
+    username: root
+    password: 123456
+    # 指定数据源类型
+    type: com.alibaba.druid.pool.DruidDataSource
+    # Druid 配置
+    # 访问 localhost:8080/api/druid    账号：root  密码：123
+    # 访问 ip:port/{项目上下文}/druid    账号：root  密码：123
+    druid:
+      # 配置初始化大小、最小、最大
+      initial-size: 10
+      minIdle: 10
+      max-active: 10
+      # 配置获取连接等待超时的时间(单位：毫秒)
+      max-wait: 60000
+      # 配置间隔多久才进行一次检测，检测需要关闭的空闲连接，单位是毫秒
+      time-between-eviction-runs-millis: 2000
+      # 配置一个连接在池中最小生存的时间，单位是毫秒
+      min-evictable-idle-time-millis: 600000
+      max-evictable-idle-time-millis: 900000
+      # 用来测试连接是否可用的SQL语句,默认值每种数据库都不相同,这是mysql
+      validationQuery: select 1
+      # 应用向连接池申请连接，并且testOnBorrow为false时，连接池将会判断连接是否处于空闲状态，如果是，则验证这条连接是否可用
+      testWhileIdle: true
+      # 如果为true，默认是false，应用向连接池申请连接时，连接池会判断这条连接是否是可用的
+      testOnBorrow: false
+      # 如果为true（默认false），当应用使用完连接，连接池回收连接的时候会判断该连接是否还可用
+      testOnReturn: false
+      # 是否缓存preparedStatement，也就是PSCache。PSCache对支持游标的数据库性能提升巨大，比如说oracle
+      poolPreparedStatements: true
+      # 要启用PSCache，必须配置大于0，当大于0时， poolPreparedStatements自动触发修改为true，
+      # 在Druid中，不会存在Oracle下PSCache占用内存过多的问题，
+      # 可以把这个数值配置大一些，比如说100
+      maxOpenPreparedStatements: 20
+      # 连接池中的minIdle数量以内的连接，空闲时间超过minEvictableIdleTimeMillis，则会执行keepAlive操作
+      keepAlive: true
+      # Spring 监控，利用aop 对指定接口的执行时间，jdbc数进行记录
+      aop-patterns: "com.springboot.template.dao.*"
+      ########### 启用内置过滤器（第一个 stat 必须，否则监控不到SQL）##########
+      filters: stat,wall,log4j2
+      # 自己配置监控统计拦截的filter
+      filter:
+        # 开启druiddatasource的状态监控
+        stat:
+          enabled: true
+          db-type: mysql
+          # 开启慢sql监控，超过2s 就认为是慢sql，记录到日志中
+          log-slow-sql: true
+          slow-sql-millis: 2000
+        # 日志监控，使用slf4j 进行日志输出
+        slf4j:
+          enabled: true
+          statement-log-error-enabled: true
+          statement-create-after-log-enabled: false
+          statement-close-after-log-enabled: false
+          result-set-open-after-log-enabled: false
+          result-set-close-after-log-enabled: false
+      ########## 配置WebStatFilter，用于采集web关联监控的数据 ##########
+      web-stat-filter:
+        enabled: true                   # 启动 StatFilter
+        url-pattern: /* # 过滤所有url
+        exclusions: "*.js,*.gif,*.jpg,*.png,*.css,*.ico,/druid/*" # 排除一些不必要的url
+        session-stat-enable: true       # 开启session统计功能
+        session-stat-max-count: 1000 # session的最大个数,默认100
+      ########## 配置StatViewServlet（监控页面），用于展示Druid的统计信息 ##########
+      stat-view-servlet:
+        enabled: true                   # 启用StatViewServlet
+        url-pattern: /druid/* # 访问内置监控页面的路径，内置监控页面的首页是/druid/index.html
+        reset-enable: false              # 不允许清空统计数据,重新计算
+        login-username: root # 配置监控页面访问密码
+        login-password: 123
+        allow: 127.0.0.1 # 允许访问的地址，如果allow没有配置或者为空，则允许所有访问
+        deny: # 拒绝访问的地址，deny优先于allow，如果在deny列表中，就算在allow列表中，也会被拒绝
+```
+
+tips： 引入了Druid依赖。还引入了**HikariCP**(可能通过 `spring-boot-starter-jdbc` 或 `spring-boot-starter-data-jpa` 引入)依赖。springboot 是默认使用**HikariCP**依赖的怎么办？
+
+1. 显示的指出来使用的数据池类型,即可
+
+```yaml
+# 指定数据源类型
+    type: com.alibaba.druid.pool.DruidDataSource
+```
+
+2. 也可以排除依赖,  mybatis 包含spring-jdbc包含HikariCP。
+
+```xml
+ <dependency>
+            <groupId>org.mybatis.spring.boot</groupId>
+            <artifactId>mybatis-spring-boot-starter</artifactId>
+            <version>2.2.2</version>
+            <exclusions>
+                <exclusion>
+                        <groupId>com.zaxxer</groupId>
+                        <artifactId>HikariCP</artifactId>
+                </exclusion>
+            </exclusions>
+</dependency>
+     
+```
+
+3. 启动测试
+
+    # 访问 localhost:8080/api/druid    账号：root  密码：123
+    # 访问 ip:port/{项目上下文}/druid    账号：root  密码：123
+
+
+
+### 代办
+
+简历优化： 多线程词条------> 分批处理解并提升性能。 OOM问题
+
+
+
+### 反思
+
+JUC八股看了一小部分，其他八股文没怎么看，明确要求自己为了督促自己看八股，挑选一个题自己写出来也没完成。
+
+不过上午学习了大概一个小时，还可以。希望明天上午可以学习两个小时。
+
+晚上时间没利用好，一学习就困，主要还是八股看困了，就玩玩手机。不行，之后尽量晚上写代码。不要学看不懂的八股。
+
+八股文大部分看着会。但是真要回答虽然也能答出来，感觉回答的不系统不清晰。真的不能仅仅是看和思考。要整理并且口述出来。具体怎么执行呢？大部分一定要自己口述出来，对于自己口述没有逻辑主次的，记录下来形成有逻辑的文档。每天一个类型只挑选一个。
+
+
+
+> 明日计划
+
+HotKey（2h） JUC 八股（3h） 模板编写（2h） 其他八股（1h）。
+
+
+
+ 
 
 
 
