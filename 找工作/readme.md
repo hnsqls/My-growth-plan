@@ -1684,3 +1684,728 @@ hot-key 核心问题也就是上述那样。
 
 
 
+## Day 8 
+
+今日完成度太低了，有点事情耽误了，但还是自己学习的效率不高，老是看个大概或则学个80%，剩下一点尾巴不做，去休息然后在下一次学习的时候再去做这一点小尾巴，感觉这样效率不高。
+
+上午学习了，但是总体注意力不集中，稍微松懈一点，这个状态就一直延后。要锻炼了，不想学习的时候就锻炼锻炼，尽量养成放松的时候就刷面试题。
+
+
+
+> 今日任务 
+
+ Sentinel(3h)  Springboot八股（2h） 每日一题（1h） 模板开发（2h）
+
+逆水行舟，不进则退！
+
+### Sentinel
+
+引言：一旦出现促销活动，网站流量会变大，还可能会有各种爬虫和恶意攻击。为了避免系统崩溃和保护服务稳定性，我们需要对网站做一定的防护措施。
+
+可以从流量进行入手，对流量控制，避免爬虫和恶意攻击。同时，如果正常的流量就是太大了，也可以进行限流**防止系统被过多的请求压垮**。
+
+此外还可以配合**熔断机制 + 降级策略**，确保系统的可用性。
+
+#### 流量控制
+
+**流量控制**：限制系统进入的请求数量，防止过载导致资源枯竭，如 CPU 和内存耗尽。
+
+流量控制的优点：
+
+1. 防止过载：当瞬间涌入的请求量超出系统处理能力时，会导致资源枯竭，如 CPU 和内存耗尽。流量控制通过限制系统能处理的请求数，确保不会发生过载。
+2. 避免雪崩效应：高负载下某个服务崩溃可能引发其他依赖服务的崩溃，形成连锁反应。流量控制可以有效预防这种连锁故障，避免系统雪崩。
+
+常见的实现流量控制种
+
++ 限流：通过固定窗口、令牌桶或漏桶等算法限制单位时间内的请求数量。
++ 排队：当请求量超出处理能力时，部分请求进入等待队列，防止立即超载。
++ 黑名单ip
+
+#### 熔断机制
+
+参考[circuit-breaking | Sentinel](https://sentinelguard.io/zh-cn/docs/circuit-breaking.html)
+
+熔断机制的目的是 **避免当下游服务发生异常时，整个系统继续耗费资源重复发起失败请求**，从而防止连锁故障。
+
+它的核心思想是**在系统出现故障时快速失败并阻止进一步的操作**，以避免故障扩散和系统崩溃。
+
+核心流程：
+
+1. 监控服务健康状态：系统会实时监控服务的调用情况，例如请求成功率、响应时间等，判断服务的健康状况。
+2. 进入熔断状态：当监控的服务的错误率达到设定阈值（如响应时间过长或出错率过高）时，系统会 **激活熔断器**，暂时停止对该服务的调用，避免消耗不必要的资源和让错误进一步扩散。
+3. 快速失败：在熔断状态下，系统不会再等待超时，而是直接返回失败响应，减少系统资源占用，并避免因长时间等待导致用户体验的恶化。（也可以降级处理）
+4. 熔断恢复机制：熔断并非永久状态。在一段时间后，熔断器会进入 **半开状态**，允许少量请求测试服务的健康情况。如果恢复正常，熔断器将关闭，恢复正常服务调用；如果仍有问题，则继续保持熔断。
+
+#### 降级机制
+
+目的是在某个服务的响应能力下降、或该服务不可用时，提供简化版的功能或返回默认值作为 **兜底**，保持系统的部分功能可用，确保用户体验的连续性，避免系统频繁报错。
+
+降级机制的好处：
+
+1. 优雅地处理故障：在降级状态下，系统不会直接返回错误信息，而是提供一个替代方案。例如，某个数据查询服务不可用时，系统可以返回缓存数据，确保用户看到的是有效信息，而非错误页面。
+2. 降低服务压力：降级有助于减轻系统对非核心服务的依赖，确保核心功能的稳定运行。例如，当推荐系统或广告服务出现故障时，降级可以减少对这些服务的调用，保护系统的整体稳定性。
+
+#### Sentinel 快速使用
+
+[quick-start | Sentinel](https://sentinelguard.io/zh-cn/docs/quick-start.html)
+
+1. 引入依赖
+
+```xml
+<dependency>
+    <groupId>com.alibaba.csp</groupId>
+    <artifactId>sentinel-core</artifactId>
+    <version>1.8.6</version>
+</dependency>
+```
+
+2. 定义资源
+
+   ```java
+   public static void main(String[] args) {
+       // 配置规则.
+       initFlowRules();
+   
+       while (true) {
+           // 1.5.0 版本开始可以直接利用 try-with-resources 特性
+           try (Entry entry = SphU.entry("HelloWorld")) {
+               // 被保护的逻辑
+               System.out.println("hello world");
+   	} catch (BlockException ex) {
+               // 处理被流控的逻辑
+   	    System.out.println("blocked!");
+   	}
+       }
+   }
+   ```
+
+   同时提供的 [注解支持模块](https://sentinelguard.io/zh-cn/docs/annotation-support.html)，来定义我们的资源，类似于下面的代码：
+
+   ```java
+   @SentinelResource("HelloWorld")
+   public void helloWorld() {
+       // 资源中的逻辑
+       System.out.println("hello world");
+   }
+   ```
+
+3. 定义规则
+
+```java
+private static void initFlowRules(){
+    List<FlowRule> rules = new ArrayList<>();
+    FlowRule rule = new FlowRule();
+    rule.setResource("HelloWorld");
+    rule.setGrade(RuleConstant.FLOW_GRADE_QPS);
+    // Set limit QPS to 20.
+    rule.setCount(20);
+    rules.add(rule);
+    FlowRuleManager.loadRules(rules);
+}
+```
+
+完成上面 3 步，Sentinel 就能够正常工作了。更多的信息可以参考 [使用文档](https://sentinelguard.io/zh-cn/docs/basic-api-resource-rule.html)。
+
+  4. 检查效果
+
+Demo 运行之后，我们可以在日志 `~/logs/csp/${appName}-metrics.log.xxx` 里看到下面的输出:
+
+日志 `~/logs/csp/${appName}-metrics.log.xxx` 启动~是用户根目录，比如C:\Users\26611
+
+```
+|--timestamp-|------date time----|--resource-|p |block|s |e|rt
+1529998904000|2018-06-26 15:41:44|hello world|20|0    |20|0|0
+1529998905000|2018-06-26 15:41:45|hello world|20|5579 |20|0|728
+1529998906000|2018-06-26 15:41:46|hello world|20|15698|20|0|0
+1529998907000|2018-06-26 15:41:47|hello world|20|19262|20|0|0
+1529998908000|2018-06-26 15:41:48|hello world|20|19502|20|0|0
+1529998909000|2018-06-26 15:41:49|hello world|20|18386|20|0|0
+```
+
+其中 `p` 代表通过的请求, `block` 代表被阻止的请求, `s` 代表成功执行完成的请求个数, `e` 代表用户自定义的异常, `rt` 代表平均响应时长。
+
+我们可以查这个日志来观看程序的运行情况，不过sentinel提供了控制台可以更好的观测。
+
+  5. 启动 Sentinel 控制台
+
+Sentinel 开源控制台支持实时监控和规则管理。接入控制台的步骤如下：
+
+（1）下载控制台 jar 包并在本地启动：可以参见 [此处文档](https://sentinelguard.io/zh-cn/docs/dashboard.html)。
+
+			1. 下载对应版本的jar包，并运行
+
+```shell
+java -Dserver.port=8131 -jar sentinel-dashboard-1.8.6.jar
+```
+
+启动 Sentinel 控制台需要 JDK 版本为 1.8 及以上版本。
+
+本地访问 http://localhost:8131/（你填的端口），即可访问控制台，**默认账号和密码都是 sentinel**
+
+从 Sentinel 1.6.0 起，Sentinel 控制台引入基本的**登录**功能，默认用户名和密码都是 `sentinel`。可以参考 [鉴权模块文档](https://sentinelguard.io/zh-cn/docs/dashboard.html#鉴权) 配置用户名和密码。
+
+登入成功![image-20250212162014241](images/readme.assets/image-20250212162014241.png)
+
+目前什么都没有，因为没有监控客户端。
+
+（2）客户端接入控制台，需要：
+
++ 客户端需要引入 Transport 模块来与 Sentinel 控制台进行通信。您可以通过 `pom.xml` 引入 JAR 包:
+
+```xml
+<dependency>
+    <groupId>com.alibaba.csp</groupId>
+    <artifactId>sentinel-transport-simple-http</artifactId>
+    <version>1.8.6</version>
+</dependency>
+```
+
++ 启动时加入 JVM 参数 `-Dcsp.sentinel.dashboard.server=consoleIp:port` 指定控制台地址和端口。更多的参数参见 [启动参数文档](https://sentinelguard.io/zh-cn/docs/startup-configuration.html)。
++ ![image-20250212162329792](images/readme.assets/image-20250212162329792.png)
++ 确保应用端有访问量.（发出一次请求，才能感知到监控）
+
+观看监控，就可以监控到流量的方法，也可以在这定义一些规则（不过不建议，因为这是基于内存的，加入我们在控制台定义好了规则，服务重启后（客户端），规则也会消失），**建议使用push模式**(后面会说)[dashboard | Sentinel](https://sentinelguard.io/zh-cn/docs/dashboard.html)
+
+![image-20250212162734392](images/readme.assets/image-20250212162734392.png)
+
+可以在控制台定义规则，如下例子
+
+![image-20250212163902569](images/readme.assets/image-20250212163902569.png)
+
+在java代码中我们定义了规则，在控制台中也定义了规则，优先使用控制台的规则，不过不建议在控制台中编写规则。因为在控制台编写规则后（规则是基于内存的），java项目关闭或者重启，之前在控制台中定义的规则就没有了。**建议使用push模式**(后面会说)[dashboard | Sentinel](https://sentinelguard.io/zh-cn/docs/dashboard.html)
+
+以上就是sentinel的快速使用，总结一下就是资源注册，规则定义，监控的使用。
+
+sentinel集成了多种框架以便更方便的使用。
+
+[open-source-framework-integrations | Sentinel](https://sentinelguard.io/zh-cn/docs/open-source-framework-integrations.html)
+
+比如上述普通的java项目，我们需要对资源进行定义。每个资源都进行定义有点臃肿（虽然可以直接使用注解）。对于一些框架，sentinel集成的使用更方便，比如springboot项目，只需要引入集成的依赖，就会自动的把每个接口都作为资源。
+
+以集成springboot 项目为例使用
+
+1. 引入依赖
+
+   建议 [参考官方文档选择版本](https://github.com/alibaba/spring-cloud-alibaba/wiki/版本说明)。由于 Spring Boot 3.0，Spring Boot 2.7~2.4 和 2.4 以下版本之间变化较大，目前企业级客户老项目相关 Spring Boot 版本仍停留在 Spring Boot 2.4 以下，为了同时满足存量用户和新用户不同需求，社区以 Spring Boot 3.0 和 2.4 分别为分界线，同时维护 2022.x、2021.x、2.2.x 三个分支迭代。
+
+```java
+<dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-sentinel</artifactId>
+            <version>2021.0.5.0</version>
+        </dependency>
+```
+
+可以看到，该依赖自动整合了 Sentinel 的 core 包、客户端通讯包、注解开发包、webmvc 适配包、热点参数限流包等：
+
+![image-20250212165803352](images/readme.assets/image-20250212165803352.png)
+
+在spring boot 程序主入口 添加jvm 参数 主要是与sentinel进行通信。
+
+```-Dcsp.sentinel.dashboard.server=localhost:8131```
+
+
+
+
+
+#### Sentinel 核心概念
+
+上述所述问题，对流量进行控制以及熔断保证系统的可用性。可以采用Sentinel。
+
+[quick-start | Sentinel](https://sentinelguard.io/zh-cn/docs/quick-start.html)
+
+Sentinel是一个流量控制，服务熔断，服务降级的组件，此外还提供监控效果。
+
+**1.核心概念**
+
+**1）资源**：表示java中的方法，或则代码块。
+
+使用sentinel来进行资源保护的步骤。
+
+1.定义资源
+
+2.定义规则
+
+3.检验规则是否生效
+
+定义资源：对于主流的框架，提供适配，只需要按照适配中的说明配置，Sentinel 就会默认定义提供的服务，方法等为资源。
+
+[basic-api-resource-rule | Sentinel](https://sentinelguard.io/zh-cn/docs/basic-api-resource-rule.html)
+
+**2）规则**：Sentinel 使用规则来定义对资源的保护策略。
+
+Sentinel 支持以下几种规则：**流量控制规则**、**熔断降级规则**、**系统保护规则**、**来源访问控制规则** 和 **热点参数规则**。
+
+[basic-api-resource-rule | Sentinel](https://sentinelguard.io/zh-cn/docs/basic-api-resource-rule.html)
+
+ 流量规则的定义
+
+重要属性：
+
+|      Field      | 说明                                                         | 默认值                        |
+| :-------------: | :----------------------------------------------------------- | :---------------------------- |
+|    resource     | 资源名，资源名是限流规则的作用对象                           |                               |
+|      count      | 限流阈值                                                     |                               |
+|      grade      | 限流阈值类型，QPS 或线程数模式                               | QPS 模式                      |
+|    limitApp     | 流控针对的调用来源                                           | `default`，代表不区分调用来源 |
+|    strategy     | 调用关系限流策略：直接、链路、关联                           | 根据资源本身（直接）          |
+| controlBehavior | 流控效果（直接拒绝 / 排队等待 / 慢启动模式），不支持按调用关系限流 | 直接拒绝                      |
+
+参考：[basic-api-resource-rule | Sentinel](https://sentinelguard.io/zh-cn/docs/basic-api-resource-rule.html)
+
+**3）控制台**：Sentinel 控制台是一个可视化的管理工具，主要用于监控、管理和配置 Sentinel 的流控规则、熔断规则等。它提供友好的界面提升可观测性
+
+**4）客户端**：是指集成了 Sentinel 的应用程序，通常是通过引入 Sentinel 的依赖来接入。客户端负责在本地对资源进行监控、限流、熔断，并将 **数据上报** 给控制台。
+
+
+
+#### Sentinel 开发模式
+
+Sentinel 的开发主要包括定义资源和定义规则。
+
+**1）定义资源**：支持通过代码、引入框架适配、[注解方式](https://sentinelguard.io/zh-cn/docs/annotation-support.html) 定义资源。
+
+通过代码定义资源，臃肿不推荐。
+
+```java
+Entry entry = null;
+// 务必保证finally会被执行
+try {
+  // 资源名可使用任意有业务语义的字符串
+  entry = SphU.entry("自定义资源名");
+  // 被保护的业务逻辑
+  // do something...
+} catch (BlockException e1) {
+  // 资源访问阻止，被限流或被降级
+  // 进行相应的处理操作
+} finally {
+  if (entry != null) {
+    entry.exit();
+  }
+}
+```
+
+通过注解定义资源，更快捷可读：
+
+```java
+public class TestService {
+
+    // 对应的 `handleException` 函数需要位于 `ExceptionUtil` 类中，并且必须为 static 函数.
+    @SentinelResource(value = "test", blockHandler = "handleException", blockHandlerClass = {ExceptionUtil.class})
+    public void test() {
+        System.out.println("Test");
+    }
+
+    // 原函数
+    //value 资源名称
+    //blockHandler 触发限流执行的方法
+    // fallback 执行熔断执行的方法
+    @SentinelResource(value = "hello", blockHandler = "exceptionHandler", fallback = "helloFallback")
+    public String hello(long s) {
+        return String.format("Hello at %d", s);
+    }
+
+    // Block 异常处理函数，参数最后多一个 BlockException，其余与原函数一致.
+    public String exceptionHandler(long s, BlockException ex) {
+        // Do some log here.
+        ex.printStackTrace();
+        return "Oops, error occurred at " + s;
+    }
+    
+    
+    
+    // Fallback 函数，函数签名与原函数一致或加一个 Throwable 类型的参数.
+    public String helloFallback(long s) {
+        return String.format("Halooooo %d", s);
+    }
+}
+```
+
+`@SentinelResource` 注解的配置优先于自动识别的配置。这意味着，如果注解中定义了特定的限流或熔断策略，这些策略将覆盖默认的或自动识别的配置。
+
+**@SentinelResource 注解用于定义资源，并提供可选的异常处理和 fallback 配置。 **
+
++ `value`：资源名称，必需项（不能为空）
+
++ `entryType`：entry 类型，可选项（默认为 `EntryType.OUT`）
+
++ `blockHandler` / `blockHandlerClass`: `blockHandler` 对应处理 `BlockException` 的函数名称，可选项。blockHandler 函数访问范围需要是 `public`，返回类型需要与原方法相匹配，参数类型需要和原方法相匹配并且最后加一个额外的参数，类型为 `BlockException`。blockHandler 函数默认需要和原方法在同一个类中。若希望使用其他类的函数，则可以指定 `blockHandlerClass` 为对应的类的 `Class` 对象，注意对应的函数必需为 static 函数，否则无法解析。
+
++ fallback：fallback 函数名称，可选项，用于在抛出异常的时候提供 fallback 处理逻辑。fallback 函数可以针对所有类型的异常（除了exceptionsToIgnore里面排除掉的异常类型）进行处理。
+
+  + fallback 函数签名和位置要求：+ 返回值类型必须与原函数返回值类型一致；
+  + 方法参数列表需要和原函数一致，或者可以额外多一个 `Throwable` 类型的参数用于接收对应的异常。
+  + fallback 函数默认需要和原方法在同一个类中。若希望使用其他类的函数，则可以指定 `fallbackClass` 为对应的类的 `Class` 对象，注意对应的函数必需为 static 函数，否则无法解析。
+
+  
+
+推荐开发模式：优先使用适配包来自动识别资源，然后能运用注解尽量运用注解，最后再选择主动编码定义资源。
+
+**2）定义规则：**支持通过代码、控制台（推荐）、配置文件来定义规则。
+
+比如通过代码定义一个限流规则，更灵活：
+
+```java
+▼private static void initFlowQpsRule() {
+    List<FlowRule> rules = new ArrayList<>();
+    FlowRule rule1 = new FlowRule();
+    rule1.setResource(resource);
+    // Set max qps to 20
+    rule1.setCount(20);
+    rule1.setGrade(RuleConstant.FLOW_GRADE_QPS);
+    rule1.setLimitApp("default");
+    rules.add(rule1);
+    FlowRuleManager.loadRules(rules);
+}
+```
+
+通过控制台配置，更高效：
+
+![img](https://pic.code-nav.cn/course_picture/1601072287388278786/cB0SWortho6g4MVe.webp)
+
+一般推荐使用控制台来配置规则，但如果希望开发者更快启动和学习项目，可以通过编码定义规则，这样不用搭建控制台、而且每次启动项目都会确保规则被创建。
+
+
+
+
+
+#### Sentinel 实战
+
+##### 1、查看题库列表接口限流熔断
+
+资源：listQuestionBankVOByPage 接口
+
+目的：限制经常访问的接口的请求频率，防止过多请求导致系统过载。
+
+限流规则：
+
++ 策略：整个接口每秒钟不超过 10 次请求
++ 阻塞操作：提示“系统压力过大，请耐心等待”
+
+熔断规则：
+
++ 熔断条件：如果接口异常率超过 10%，或者慢调用（响应时长 > 3 秒）的比例大于 20%，触发 60 秒熔断。
++ 熔断操作：直接返回本地数据（缓存或空数据）
+
+
+
+实战编写
+
+
+
+```java
+ 
+ /**
+     * 分页获取题库列表（封装类）
+     *
+     * @param questionBankQueryRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/list/page/vo")
+    @SentinelResource(value = "listQuestionBankVOByPage",blockHandler = "questionBankQpsSentinel",fallback = "questionBankFallback")
+    public BaseResponse<Page<QuestionBankVO>> listQuestionBankVOByPage(@RequestBody QuestionBankQueryRequest questionBankQueryRequest,
+                                                               HttpServletRequest request) {
+        long current = questionBankQueryRequest.getCurrent();
+        long size = questionBankQueryRequest.getPageSize();
+        // 限制爬虫
+        ThrowUtils.throwIf(size > 200, ErrorCode.PARAMS_ERROR);
+        // 查询数据库
+        Page<QuestionBank> questionBankPage = questionBankService.page(new Page<>(current, size),
+                questionBankService.getQueryWrapper(questionBankQueryRequest));
+        // 获取封装类
+        return ResultUtils.success(questionBankService.getQuestionBankVOPage(questionBankPage, request));
+    }
+
+// 限流
+
+    /**
+     *  查询题库列表限流 处理
+     * @param questionBankQueryRequest
+     * @param request
+     * @param ex
+     * @return
+     */
+    public static BaseResponse<Page<QuestionBankVO>> questionBankQpsSentinel(@RequestBody QuestionBankQueryRequest questionBankQueryRequest,
+                                                                       HttpServletRequest request, BlockException ex){
+        return ResultUtils.error(ErrorCode.SYSTEM_ERROR.getCode(), "限流系统压力过大，请耐心等待");
+
+
+    }
+
+    // 熔断
+
+    public static BaseResponse<Page<QuestionBankVO>> questionBankFallback(@RequestBody QuestionBankQueryRequest questionBankQueryRequest,
+                                                                      HttpServletRequest request, Throwable ex){
+        return ResultUtils.error(ErrorCode.SYSTEM_ERROR.getCode(), "查询题库列表熔断");
+
+    }
+```
+
+在控制台编写限流以及熔断规则
+
+限流规则  QPS 2   
+
+熔断规则 如果接口异常率超过 10%，或者慢调用（响应时长 > 3 秒）的比例大于 20%，触发 60 秒熔断。
+
+限流测试
+
+![image-20250212200418425](images/readme.assets/image-20250212200418425.png)
+
+熔断测试
+
+注意异常降级**仅针对业务异常**，对 Sentinel 限流降级本身的异常（`BlockException`）不生效
+
+![image-20250212200437328](images/readme.assets/image-20250212200437328.png)
+
+但是在发生熔断的过程中，我们设置了熔断时间60s, 在这熔断时间内，即使是正常的请求还是会报熔断的错。
+
+但是测试发现不是这样的，在熔断时间内，我们发送正确的请求。
+
+报限流的错误。
+
+![image-20250212200809011](images/readme.assets/image-20250212200809011.png)
+
+发现 blockHandler  不仅仅处理限流的异常，还处理降低的异常。 就是说当超过QPS规则时调用这个方法，当抛出业务降级时也还会调用这个方法（业务发生错误--->熔断降级--->调用熔断的逻辑，此后在熔断时间内都是业务降级异常，而这个异常又会被blockHandler捕获，从而执行限流的方法）
+
+解决方法： 在限流的方法中判断是否时是降级的异常，如果是就调用熔断降级方法。
+
+```java
+   /**
+     *  查询题库列表限流 处理
+     * @param questionBankQueryRequest
+     * @param request
+     * @param ex
+     * @return
+     */
+    public static BaseResponse<Page<QuestionBankVO>> questionBankQpsSentinel(@RequestBody QuestionBankQueryRequest questionBankQueryRequest,
+                                                                       HttpServletRequest request, BlockException ex){
+
+        if (ex instanceof DegradeException){
+            return questionBankFallback(questionBankQueryRequest,request,ex);
+        }
+        return ResultUtils.error(ErrorCode.SYSTEM_ERROR.getCode(), "限流系统压力过大，请耐心等待");
+    }
+
+    // 熔断
+
+    public static BaseResponse<Page<QuestionBankVO>> questionBankFallback(@RequestBody QuestionBankQueryRequest questionBankQueryRequest,
+                                                                      HttpServletRequest request, Throwable ex){
+        return ResultUtils.error(ErrorCode.SYSTEM_ERROR.getCode(), "查询题库列表熔断");
+
+    }
+
+
+```
+
+##### **2、单 IP 查看题目列表限流熔断**
+
+资源：listQuestionVoByPage 接口
+
+限流规则：
+
++ 策略：每个 IP 地址每分钟允许查看题目列表的次数不能超过 60 次。
++ 阻塞操作：提示“访问过于频繁，请稍后再试”
+
+熔断规则：
+
++ 熔断条件：如果接口异常率超过 10%，或者慢调用（响应时长 > 3 秒）的比例大于 20%，触发 60 秒熔断。
++ 熔断操作：直接返回本地数据（缓存或空数据）
+
+由于需要针对每个用户进一步精细化限流，而不是整体接口限流，可以采用 [热点参数限流机制](https://sentinelguard.io/zh-cn/docs/parameter-flow-control.html)，允许根据参数控制限流触发条件。
+
+参考demo
+
+```java
+/**
+     * 分页获取题目列表（封装类） 限流
+     *
+     * @param questionQueryRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/list/page/vo1")
+    public BaseResponse<Page<QuestionVO>> listQuestionVOByPageSentinel(@RequestBody QuestionQueryRequest questionQueryRequest,
+                                                               HttpServletRequest request) {
+        long current = questionQueryRequest.getCurrent();
+        long size = questionQueryRequest.getPageSize();
+        // 限制爬虫
+        ThrowUtils.throwIf(size > 20, ErrorCode.PARAMS_ERROR);
+
+        String remoteAddr = request.getRemoteAddr();
+        Entry entry = null;
+
+        try{
+            // 注册资源
+            entry = SphU.entry("listQuestionVOByPage", EntryType.IN, 1, remoteAddr);
+
+            // 被保护的资源
+            Page<Question> questionPage = questionService.page(new Page<>(current, size),
+                    questionService.getQueryWrapper(questionQueryRequest));
+            // 获取封装类
+            return ResultUtils.success(questionService.getQuestionVOPage(questionPage, request));
+        }
+        catch (Throwable ex){
+            //如果是业务报错
+            if (!BlockException.isBlockException(ex)) {
+                //上报 用于统计异常数
+                Tracer.trace(ex);
+                return ResultUtils.error(ErrorCode.SYSTEM_ERROR.getCode(), "系统异常");
+            }
+            //降级操作
+            if (ex instanceof DegradeException){
+                return ResultUtils.error(ErrorCode.SYSTEM_ERROR,"服务熔断 null");
+            }
+            // 限流操作
+            return ResultUtils.error(ErrorCode.SYSTEM_ERROR, "访问过于频繁，请稍后再试");
+        }finally {
+            if (entry != null) {
+                entry.exit(1, remoteAddr);
+            }
+        }
+    }
+```
+
+由于每次重启服务，在控制台都要编写规则，我们可以使用java代码指定规则。
+
+```java
+/**
+ *  限流 熔断规则
+ */
+@Component
+public class SentinelRulesManager {
+
+    @PostConstruct
+    public void initRules() {
+        initFlowRules();
+        initDegradeRules();
+    }
+
+    // 限流规则
+    public void initFlowRules() {
+        // 单 IP 查看题目列表限流规则
+        ParamFlowRule rule = new ParamFlowRule("listQuestionVOByPage")
+                .setParamIdx(0) // 对第 0 个参数限流，即 IP 地址
+                .setCount(20) // 每分钟最多 60 次
+                .setDurationInSec(60); // 规则的统计周期为 60 秒
+        ParamFlowRuleManager.loadRules(Collections.singletonList(rule));
+    }
+
+    // 降级规则
+    public void initDegradeRules() {
+        // 单 IP 查看题目列表熔断规则
+        DegradeRule slowCallRule = new DegradeRule("listQuestionVOByPage")
+                .setGrade(CircuitBreakerStrategy.SLOW_REQUEST_RATIO.getType())
+                .setCount(0.2) // 慢调用比例大于 20%
+                .setTimeWindow(60) // 熔断持续时间 60 秒
+                .setStatIntervalMs(30 * 1000) // 统计时长 30 秒
+                .setMinRequestAmount(10) // 最小请求数
+                .setSlowRatioThreshold(3); // 响应时间超过 3 秒
+
+        DegradeRule errorRateRule = new DegradeRule("listQuestionVOByPage")
+                .setGrade(CircuitBreakerStrategy.ERROR_RATIO.getType())
+                .setCount(0.1) // 异常率大于 10%
+                .setTimeWindow(60) // 熔断持续时间 60 秒
+                .setStatIntervalMs(30 * 1000) // 统计时长 30 秒
+                .setMinRequestAmount(10); // 最小请求数
+
+        // 加载规则
+        DegradeRuleManager.loadRules(Arrays.asList(slowCallRule, errorRateRule));
+    }
+}
+```
+
+
+
+### 每日一题
+
+1. Java 中 == ， equals，hashCode 有什么区别？
+
+他们都是用于比较对象的常用方法。
+
+区别
+
+* `==` 
+
+  * 比较对象时，比较对象的地址是否相同 
+  * 比较基本类型时，比较值是否相同
+
+* `equals` 方法
+
+  * 继承子Object类，也就是只有对象才有该方法
+
+  * 默认是比较对象的地址是否相同
+
+    * ![image-20250213001812054](images/readme.assets/image-20250213001812054.png)
+
+  * 比较对象的内容是否相同，通常如果我们自定义的对象，要想将对象的内容一样看相同，要重写equals方法
+
+  * 有的Java对象也提供了equals的重写，比如String
+
+    * ```java
+      		String s1 = new String("hello world");
+              String s2 = new String("hello world");
+              System.out.println(s1 == s2); //false
+              System.out.println(s1.equals(s2));//true
+      
+              String s3 = "hello";
+              String s4 = "hello";
+              System.out.println(s3 == s4); //true
+              System.out.println(s3.equals(s4)); //true
+      ```
+
+      * 为什么 s1 == s2  flase， 因为地址不一样
+      * 为什么s1.equals（s2）true, 不是说equals默认比较地址是否相同吗？明明地址不一样为啥还是相同呢？这是因为String已经重写了equals()方法![image-20250213002353344](images/readme.assets/image-20250213002353344.png)
+      * 为什么 s3 == s4 是true。难道说他俩地址相同？确实是这样。因为字符串常量池的存在，在创建字符串时，先判断缓冲池中是否有一样的字符串，如果有就直接将其地址赋值到要创建的变量上，避免字符串额外的创建。如果使用new 方式来创建的话，即使常量池中存在也会创建一个新的对象。
+
+
+
+2. Java 中 HashMap 和 HashTable 有什么区别？
+
+二者都是存储key = value型的数据接口。在安全性以及性能有较大区别。
+
+HashMap 多线程下不安全，HashTable 线程安全，因为每个方法都被`synchronized`修饰，也因性能比较差。
+
+HashMap 可以存储null key 以及null 值。 HashTable 不允许存null key 以及 null 值。
+
++ 如果需要线程安全的哈希表，推荐使用 `ConcurrentHashMap` 而不是 `Hashtable`，因为 `ConcurrentHashMap` 的性能更好。
+
+
+
+3. Mysql 中 text 字段可以存多少数据？
+
+Mysql 中 text 时存储长文本类型的数据，其占用的字节数取决text 的类型。
+
+* TINYTEXT ： 最大长度：255字节。适用于存储非常短的文本数据。
+* TEXT ：最大长度：65,535字节（约64KB）。是最常用的TEXT类型，适用于存储中等长度的文本数据。
+* MEDIUMTEXT ：最大长度：16,777,215字节（约16MB）。适用于需要存储较长文本数据的场景。
+* LONGTEXT：最大长度：4,294,967,295字节（约4GB）。是能存储最多数据的TEXT类型，适用于需要存储大量文本数据的场景。
+
+在 UTF-8 编码中，字符的存储长度是动态的，根据字符的 Unicode 码点范围，一个字符占用 **1 到 4 个字节**。大多数常用中文字符占用 **3 个字节**，但也有部分中文字符占用 **4 个字节**。
+
+ 也就是TEXT 类型大概可以存`64 KB / 3 ≈ 21,845` 个字符。
+
+
+
+### 反思
+
+今天状态还可以，不过还是起床晚（11点）。对于预测的任务不能按时完成。学个sentinel计划3h，实际用了6h。看文档以及总结文档耗时比较多，实际用sentinel需求也就1h. 耗时那么多的原因很大一部分是，想自己表达出来核心原理以及概念。能够有的说。但是耗时太久了，现在回想起来，感觉根本用不了那么所时间。大概了解一下概念，知道官方文档说的是啥就行。之后在去复习概念会好一点。
+
+下次在学习新技术，首先了解一下概念，先不着急自己总结整理概念（理解不深，总结也没用），然后快速的实现demo。参考最佳开发模式。进行实战或则参考别人的实战，自己大概会用了之后，在总结概念文档。
+
+八股文的话，看了一个多小时（还是刚刚看的），感觉没看多少，也只挑选出了3道题。我本意是一个类一个的，但是只看3个题库的部分就用了一个多小时。感觉看题的状态还挺好，就不纠结速度了。
+
+模板开发：我已经2天没写了。XXXXXXXXXXXXXXXXXX，明天一定要写。
+
+> 明日任务
+
+动态黑名单（3h） 模板开发（2h） JUC八股（2h）每日一题（2h）
+
+早点睡觉~
+
+
+
+
+
+
+
