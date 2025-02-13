@@ -2347,7 +2347,7 @@ public class SentinelRulesManager {
               String s2 = new String("hello world");
               System.out.println(s1 == s2); //false
               System.out.println(s1.equals(s2));//true
-      
+        
               String s3 = "hello";
               String s4 = "hello";
               System.out.println(s3 == s4); //true
@@ -2409,3 +2409,398 @@ Mysql 中 text 时存储长文本类型的数据，其占用的字节数取决te
 
 
 
+## Day 9
+
+今天状态还可以，不过还是起床晚（11点）。对于预测的任务不能按时完成。学个sentinel计划3h，实际用了6h。看文档以及总结文档耗时比较多，实际用sentinel需求也就1h. 耗时那么多的原因很大一部分是，想自己表达出来核心原理以及概念。能够有的说。但是耗时太久了，现在回想起来，感觉根本用不了那么所时间。大概了解一下概念，知道官方文档说的是啥就行。之后在去复习概念会好一点。
+
+下次在学习新技术，首先了解一下概念，先不着急自己总结整理概念（理解不深，总结也没用），然后快速的实现demo。参考最佳开发模式。进行实战或则参考别人的实战，自己大概会用了之后，在总结概念文档。
+
+八股文的话，看了一个多小时（还是刚刚看的），感觉没看多少，也只挑选出了3道题。我本意是一个类一个的，但是只看3个题库的部分就用了一个多小时。感觉看题的状态还挺好，就不纠结速度了。
+
+模板开发：我已经2天没写了。XXXXXXXXXXXXXXXXXX，明天一定要写。
+
+> 明日任务
+
+动态黑名单（3h） 模板开发（2h） JUC八股（2h）每日一题（2h）
+
+早点睡觉~
+
+
+
+### 动态黑名单实现
+
+限流和熔断，主要目的是保护系统的稳定性，防止服务器压力过大导致崩溃。主要是对全部用户（正常用户和恶意用户）的限制。
+
+但是发现恶意用户访问，怎么办呢？当然限流可以限制，更好的解决应该是不让该ip访问应用。
+
+我们可以唯一一个黑名单，在黑名单内的ip不能访问我们的应用。
+
+如何实现？考虑一下问题
+
+1. 黑名单保存在哪里
+2. 如何方便的管理黑名单
+3. 如何过滤黑名单
+
+从问题入手，思考如何实现
+
+黑名单的保存，直接用java代码set保存，数据库保存，配置文件保存。这些都可以。
+
+如何方便的管理黑名单？ 在代码中编写黑名单不建议，管理不好管理，数据库也一样不好管理（并且判断是否是黑ip还要请求数据库的资源）。最方便就是在配置文件里管理。
+
+如何实现黑名单的过滤，若ip 不多，用HashSet集合接收ip,然后用判断ip是否在这个集合中也行。但是数据量大了之后占用内存太多了。可以考虑使用布隆过滤器，根据黑名单ip 和布隆过滤器 来快速的判断请求的ip是否存在黑ip集合中。
+
+在配置文件里保在nocas，因为黑名单可能是一直增长的，在本地的配置文件记录的化，要一段时间添加黑名单，要重启服务才能生效。但是使用nocas可以不用重启服务。而且nacos提供了对配置的监听，我们客服端可以对nacos的配置文件进行监听，监听到nacos的文件发生变化，就通过布隆过滤器重新加载以下黑名单。
+
+
+
+最佳实践：就是 nocas存黑名单， 然后使用nacos的监听器，监听nacos配置的变化，当配置文件发生变化，我们执行黑名单对布隆过滤器的映射。在全局过滤器或者拦截器中编写拦截判断是否是黑名单。
+
+拦截的时机，当然是越早越好：黑名单应该对所有请求生效（不止是 Controller 的接口），所以基于 WebFilter 实现而不是 AOP 切面。WebFilter 的优先级高于 @Aspect 切面，因为它在整个 Web 请求生命周期中更早进行处理。
+
+请求进入时的顺序：
+
++ WebFilter：首先，WebFilter 拦截 HTTP 请求，并可以根据逻辑决定是否继续执行请求。
++ Spring AOP 切面（@Aspect）：如果请求经过过滤器并进入 Spring 管理的 Bean（例如 Controller 层），此时切面生效，对匹配的 Bean 方法进行拦截。
++ Controller 层：如果 @Aspect 没有阻止执行，最终请求到达 @Controller 或 @RestController 的方法。
+
+所以使用WebFilter 拦截
+
+#### Nacos
+
+nacos 是一个配置，注册中心。作为配置中心的好处，可以统一管理配置文件（微服务中，当配置文件多了之后，每个业务的配置中心）包括版本控制，实时更新等等。（只考配置中心）
+
+参考文档：[Nacos 快速开始 | Nacos 官网](https://nacos.io/docs/latest/quickstart/quick-start/?spm=5238cd80.2ef5001f.0.0.3f613b7cKZKWRs)
+
+1.下载： [发布历史 | Nacos 官网](https://nacos.io/download/release-history/)
+
+在 nacos/bin 目录下启动    注意选择启动方式： standalone单机
+
+```shell
+startup.cmd -m standalone
+```
+
+2. 地址：http://127.0.0.1:8848/nacos  默认用户名密码 都是 nacos
+
+![image-20250213162957081](images/readme.assets/image-20250213162957081.png)
+
+3. 在控制台中添加配置
+
+·![image-20250213163225922](images/readme.assets/image-20250213163225922.png)
+
+
+
+4. 引入依赖
+
+可以直接使用 Spring Boot Starter 快速引入 Nacos，[参考文档](https://nacos.io/zh-cn/docs/quick-start-spring-boot.html)。
+
+```xml
+<dependency>
+    <groupId>com.alibaba.boot</groupId>
+    <artifactId>nacos-config-spring-boot-starter</artifactId>
+    <version>0.2.12</version>
+</dependency>
+```
+
+5. 配置
+
+```yaml
+# 配置中心
+nacos:
+  config:
+    server-addr: 127.0.0.1:8848  # nacos 地址
+    bootstrap:
+      enable: true  # 预加载
+    data-id: mianshidog # 控制台填写的 Data ID
+    group: DEFAULT_GROUP # 控制台填写的 group
+    type: yaml  # 选择的文件格式
+    auto-refresh: true # 开启自动刷新
+
+```
+
+6. 创建黑名单过滤工具
+
+以下是使用的是HuTool工具库 ， 如果是分布式，还可以考虑 Redisson。
+
+```java
+@Slf4j
+public class BlackIpUtils {
+
+    private static BitMapBloomFilter bloomFilter;
+
+    // 判断 ip 是否在黑名单内
+    public static boolean isBlackIp(String ip) {
+        return bloomFilter.contains(ip);
+    }
+
+    // 重建 ip 黑名单----> 加入到布隆过滤器中
+    public static void rebuildBlackIp(String configInfo) {
+        if (StrUtil.isBlank(configInfo)) {
+            configInfo = "{}";
+        }
+        // 解析 yaml 文件
+        Yaml yaml = new Yaml();
+        Map map = yaml.loadAs(configInfo, Map.class);
+        // 获取 ip 黑名单
+        List<String> blackIpList = (List<String>) map.get("blackIpList");
+        // 加锁防止并发
+        synchronized (BlackIpUtils.class) {
+            if (CollectionUtil.isNotEmpty(blackIpList)) {
+                // 注意构造参数的设置
+                BitMapBloomFilter bitMapBloomFilter = new BitMapBloomFilter(958506);
+                for (String ip : blackIpList) {
+                    bitMapBloomFilter.add(ip);
+                }
+                bloomFilter = bitMapBloomFilter;
+            } else {
+                bloomFilter = new BitMapBloomFilter(100);
+            }
+        }
+    }
+}
+
+```
+
+7.  创建 Nacos 配置监听类
+
+可以直接通过 Nacos 控制台获取示例代码：
+
+项目初始化的时候，执行一次监听器代码，和ip黑名单加载布隆过滤器。
+
+当监听到变化的时候 执行receiveConfigInfo方法（）。方法的内容是我们处理的逻辑
+
+```java
+@Slf4j
+@Component
+public class NacosListener implements InitializingBean {
+
+    @NacosInjected
+    private ConfigService configService;
+
+    @Value("${nacos.config.data-id}")
+    private String dataId;
+
+    @Value("${nacos.config.group}")
+    private String group;
+
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        log.info("nacos 监听器启动");
+
+        String config = configService.getConfigAndSignListener(dataId, group, 3000L, new Listener() {
+            final ThreadFactory threadFactory = new ThreadFactory() {
+                private final AtomicInteger poolNumber = new AtomicInteger(1);
+                @Override
+                public Thread newThread(@NotNull Runnable r) {
+                    Thread thread = new Thread(r);
+                    thread.setName("refresh-ThreadPool" + poolNumber.getAndIncrement());
+                    return thread;
+                }
+            };
+            final ExecutorService executorService = Executors.newFixedThreadPool(1, threadFactory);
+
+            // 通过线程池异步处理黑名单变化的逻辑
+            @Override
+            public Executor getExecutor() {
+                return executorService;
+            }
+
+            // 监听后续黑名单变化
+            @Override
+            public void receiveConfigInfo(String configInfo) {
+                log.info("监听到配置信息变化：{}", configInfo);
+                BlackIpUtils.rebuildBlackIp(configInfo);
+            }
+        });
+        // 初始化黑名单
+        BlackIpUtils.rebuildBlackIp(config);
+    }
+}
+
+```
+
+8. 拦截所有的请求，判断是否是黑名单
+
+可以使用  WebFilter,  在servlet 请求之前进行校验， 比较推荐，因为过滤给名单应该最早拦截。
+
+注意是使用的原生SevletAPI  需要在启动类上添加 @ServletComponentScan
+
+```java
+/**
+ * 全局ip 黑名单 过滤
+ * 注意 在spring boot 中 需要配置 @ServletComponentScan 才能生效
+ */
+@WebFilter(urlPatterns = "/*", filterName = "blackIpFilter")
+public class BlackIpFilter implements Filter {
+
+    @Override
+    public void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain) throws IOException, ServletException, IOException, ServletException {
+
+        String ipAddress = NetUtils.getIpAddress((HttpServletRequest) servletRequest);
+        if (BlackIpUtils.isBlackIp(ipAddress)) {
+            System.out.println("黑名单IP，禁止访问：" + ipAddress);
+            servletResponse.setContentType("text/json;charset=UTF-8");
+            servletResponse.getWriter().write("{\"errorCode\":\"-1\",\"errorMsg\":\"黑名单IP，禁止访问\"}");
+            return;
+        }
+        filterChain.doFilter(servletRequest, servletResponse);
+    }
+
+}
+```
+
+打断点测试 是否请求都先进入到过滤器中
+
+![image-20250213171917100](images/readme.assets/image-20250213171917100.png)
+
+
+
+发现本地确实进入了，并且本地ip是 "0:0:0:0:0:0:0:1"
+
+将该ip加入到配置中心--------------->发布
+
+![image-20250213172043981](images/readme.assets/image-20250213172043981.png)
+
+在测试
+
+![image-20250213172138877](images/readme.assets/image-20250213172138877.png)
+
+接口文档也不能访问
+
+![image-20250213172501956](images/readme.assets/image-20250213172501956.png)
+
+
+
+完成黑名单过滤。 
+
+补充，也可以使用拦截器进行拦截黑名单（二选一），不过拦截器是在过滤器之后执行的。
+
+以下是拦截器的demo
+
+```java
+/**
+ *  黑名单拦截器
+ */
+public class BlackIpInterceptor  implements HandlerInterceptor {
+
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        String remoteAddr = request.getRemoteAddr();
+        if (BlackIpUtils.isBlackIp(remoteAddr)) {
+            System.out.println("黑名单IP，禁止访问：" + remoteAddr);
+            response.setContentType("text/json;charset=UTF-8");
+            response.getWriter().write("{\"errorCode\":\"-1\",\"errorMsg\":\"黑名单IP，禁止访问\"}");
+            return false;
+        }
+        return true;
+    }
+
+}
+```
+
+```java
+/**springmvc 拦截器的配置
+*/
+@Configuration
+public class WebMvcConfig implements WebMvcConfigurer {
+   
+    //登录拦截器
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        // 黑名单拦截器
+         registry.addInterceptor(new BlackIpInterceptor());
+    }
+    
+}
+
+```
+
+
+
+### 每日一题
+
+1. Java 注解的原理
+
+Java 注解（Annotation）是一种元数据，用于为代码提供额外的信息,不会直接影响代码的执行，但可以通过反射机制在运行时或编译时()被读取和处理。
+
+1. 注解的定义
+
+注解通过 `@interface` 关键字定义，类似于接口的定义。注解可以包含元素（类似于方法），这些元素可以有默认值。
+
+通过元注解来规定注解使用的范围。元注解是用于定义其他注解的注解。Java 提供了以下几种元注解：
+
++ **`@Retention`**：指定注解的保留策略。
+  + `RetentionPolicy.SOURCE`：注解仅在源码中保留，编译时丢弃。
+  + `RetentionPolicy.CLASS`：注解在编译时保留，但运行时不可见（默认策略）。
+  + `RetentionPolicy.RUNTIME`：注解在运行时保留，可以通过反射读取。
++ **`@Target`**：指定注解可以应用的目标元素。
+  + `ElementType.TYPE`：类、接口、枚举。
+  + `ElementType.METHOD`：方法。
+  + `ElementType.FIELD`：字段。
+  + `ElementType.PARAMETER`：参数。
+  + 其他目标元素。
++ **`@Documented`**：指定注解是否包含在 Javadoc 中。
++ **`@Inherited`**：指定注解是否可以被继承。
++ **`@Repeatable`**：指定注解是否可以重复使用。
+
+```java
+@Retention(RetentionPolicy.RUNTIME)
+@Target(ElementType.METHOD)
+public @interface MyAnnotation {
+    String value() default "";
+    int count() default 0;
+}
+```
+
+2. 注解的使用
+
+```java
+@MyAnnotation(value = "example", count = 10)
+public class MyClass {
+    @MyAnnotation(count = 5)
+    public void myMethod() {
+        // 方法体
+    }
+}
+```
+
+3. 注解的处理机制
+
+* 编译时处理
+
+  在编译阶段，通过注解处理器（Annotation Processor）读取和处理注解。注解处理器可以生成新的代码、资源文件，或者对代码进行静态检查。
+
+* 运行时处理
+
+  在程序运行时，通过**反射机制**读取注解信息，并根据注解的内容执行相应的逻辑。
+
+  使用 Java 反射 API（如 `Class`、`Method`、`Field` 等）获取注解信息。
+
+  ```java
+  Class<?> clazz = MyClass.class;
+  MyAnnotation annotation = clazz.getAnnotation(MyAnnotation.class);
+  if (annotation != null) {
+      System.out.println("Value: " + annotation.value());
+      System.out.println("Count: " + annotation.count());
+  }
+  ```
+
+  应用场景
+
+  + 框架中的依赖注入（如 Spring 的 `@Autowired`）。
+  + 动态代理（如 JDK 动态代理）。
+
+  
+
+**元数据**（Metadata）是“关于数据的数据”，即描述其他数据的信息。
+
+### 反思
+
+对于八股，看来一个多小时，也就挑选出一题，速度要快一点，自己深入总结确实有点慢。每次使用的时间都比预计的时间长2倍甚至。
+
+晚上没学习，晚上八点想学习了，没有立刻去行动，然后就导致一直没有学直到现在。提高自己的执行力把。想就去做不要拖。本来我今天的总结反思都不想写了，很困了。但是真正写出来，我又有点进入学习状态了。马上开学习了，早点睡觉调整调整作息。
+
+> 明日任务
+
+黑马点评复习 （希望可以复习到分布式锁，希望） Redis八股（2h），后端模板编写（1h）。 每日一题（1h）。
+
+早带睡觉
