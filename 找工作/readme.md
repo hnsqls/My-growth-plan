@@ -3393,3 +3393,720 @@ xx 现在23:16,和家人沟通了下,还是不去北京那个实习了. 下周�
 > 明日任务
 
  用户中心项目的登录注册,拦截校验逻辑自己实现一遍(3h)  看八股文(2h)    分布式全局唯一id(0.5h)   想学一个MQ(5h).  每日一题(1h)
+
+## Day 12
+
+
+
+> 今日任务
+
+ 用户中心项目的登录注册,拦截校验逻辑自己实现一遍(3h)  看八股文(2h)    分布式全局唯一id(0.5h)   想学一个MQ(5h).  每日一题(1h)
+
+
+
+
+
+### Rabbit MQ
+
+RabbitMQ 是一个开源的**消息代理**（Message Broker），用于在分布式系统中实现应用程序之间的异步通信。它基于 **AMQP（高级消息队列协议）**，并支持多种消息协议（如 MQTT、STOMP 等），广泛应用于解耦系统、异步任务处理、负载均衡等场景。
+
+xxxx 感觉还是学一下微服务通下来。 不太深入理解MQ 的作用
+
+
+
+### SpringCloud 
+
+#### 分布式概念
+
+1. 单体
+
+
+
+1. 集群
+
+为例解决单体服务性能的局限性。我们可以复制多个单体项目（副本）多部署几台服务器。这样就有一个问题，怎么根据我们的域名 找到我们的服务，因为我们有多台服务器。可以引入网关Nginx,完成请求的路由，负载均衡的算法，均摊给服务器。当然并发多了，数据库也要复制副本，集群搭建。
+
+1. 分布式
+
+模板化升级导致牵一发动全身，比如订单模块 如果经常更新 v1 v2 v3 ， 只修改了这一个模块，还要导致全部模块重启服务。
+
+多语言的模块话合作    C++直播模块。
+
+按照业务功能模块拆分。 拆分成的模块，叫做微服务。 数据库也可以拆分，按照业务的边界，这样就每个业务就连接自己的数据库。
+
+
+
+
+
+由于不在一个服务器上，需要用其他请求，就可以远程调用（ RPC）
+
+
+
+假如我的一个微服务模块宕机了（避免单体故障，应该将微服务的副本多方在不同的服务器上。）怎么知道他的副本在哪？ 可以使用  服务发现 服务注册， 也就是nacos。 每一个微服务模块和他的副本要告知nacos,自己的服务名，和地址。  其他微服务模块需要远程调用其他微服务模块，就可以通过nacos 发现服务的地址，同时如果发现多个服务器都提供该功能，可以负载均衡分发。
+
+配置中心： 同一管理 所有的配置（版本控制），并且配置发生改变会push到服务端， 我们的服务就可以不停机的修改。
+
+
+
+百万用户的请求： 一个微服务的卡顿，导致整个调用链的卡顿，请求的堆积导致服务器资源的耗尽，导致服务雪崩。引入服务熔断机制。 在远程调用期间，发现服务出错了（配置熔断的规则）， 直接返回null或则其他缓存，快速失败。
+
+
+
+现在每个服务器都不是完整的应用请求，域名绑定那里呢？之前集群模式下，用Ngnix随便给那个服务都可以。但是现在不能随便分发，要配置路由规则，也就是假如请求 /order，就转发到order服务器上（Nginx去nacos中发现服务），处理期间，连接上属于自己的数据库，而在业务层面，数据库需要交互， 下订单 ---->用户加积分。 要保持数据的一致性。要解决分布式事务(seata)。
+
+
+
+#### 分布式实战
+
+**![image-20250216110416088](images/readme.assets/image-20250216110416088-1739719900011.png)**
+
+[版本发布说明-阿里云Spring Cloud Alibaba官网](https://sca.aliyun.com/docs/2022/overview/version-explain/?spm=7145af80.1ef41eac.0.0.1fa12d5b5SFXD1)
+
+示例demo
+
+![image-20250216110728783](images/readme.assets/image-20250216110728783-1739719900012.png)
+
+
+
+## Nacos
+
+nacos 是一个配置中心，服务注册，服务发现。作为配置中心的好处，可以统一管理配置文件（微服务中，当配置文件多了之后，每个业务的配置中心）包括版本控制，实时更新等等。（只考配置中心）。
+
+服务注册，服务发现。是分布式系统下的核心， 我们将单机项目拆分成微服务，并且保证其单点故障性，会有很多的服务器上有微服务的副本，我们只要是微服务我们都可以将其注册到nacos中， 等到之后RPC调用，也是通nacos找到调用的服务。
+
+参考文档：[Nacos 快速开始 | Nacos 官网](https://nacos.io/docs/latest/quickstart/quick-start/?spm=5238cd80.2ef5001f.0.0.3f613b7cKZKWRs)
+
+1.下载： [发布历史 | Nacos 官网](https://nacos.io/download/release-history/)
+
+在 nacos/bin 目录下启动    注意选择启动方式： standalone单机
+
+```shell
+startup.cmd -m standalone
+```
+
+2. 地址：http://127.0.0.1:8848/nacos  默认用户名密码 都是 nacos
+
+
+
+### 服务注册
+
+---
+
+![image-20250216121711855](images/readme.assets/image-20250216121711855.png)
+
+服务注册，主要是对分布式架构下微服务来说的。
+
+1. 初始化微服务 引入依赖
+
+```xml
+<dependencies>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter-web</artifactId>
+            </dependency>
+    <!--        nacos 服务注册与发现-->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-nacos-discovery </artifactId>
+        </dependency>
+    
+</dependencies>
+```
+
+2. 编写配置
+
+主要就是配置nacos的地址
+
+```java
+spring:
+  application:
+    name: service-order
+
+  cloud:
+    nacos:
+      config:
+        server-addr: 127.0.0.1:8848  # nacos 地址
+
+server:
+  port: 8082
+```
+
+编写启动类测试
+
+![image-20250216131536210](images/readme.assets/image-20250216131536210.png)
+
+
+
+服务就注册成功了！
+
+为了演示微服务下的模式，我们可以多启动结果不同端口的演示
+
+![image-20250216132057548](images/readme.assets/image-20250216132057548.png)
+
+添加参数 --server.port = 8083
+
+会在未启动的列表
+
+![image-20250216132356774](images/readme.assets/image-20250216132356774.png)
+
+启动测试
+
+![image-20250216132532586](images/readme.assets/image-20250216132532586.png)
+
+![image-20250216132546943](images/readme.assets/image-20250216132546943.png)
+
+以上就是服务注册。
+
+
+
+### 服务发现
+
+开启服务发现的功能 ： **@EnableDiscoveryClient**
+
+在微服务项目启动类开启
+
+```java
+@EnableDiscoveryClient
+@SpringBootApplication
+public class OrderMainApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(OrderMainApplication.class,args);
+    }
+}
+
+```
+
+测试 服务发现API
+
+**DiscoveryClient**和 **NacosDiscoveryClient**
+
+两者的区别，就是前者是标准Spring提供的。后者式nacos提供的。
+
+```java
+@SpringBootTest
+public class DiscoveryTest {
+
+
+    @Autowired
+     DiscoveryClient discoveryClient;
+
+    @Resource
+    NacosDiscoveryClient nacosDiscoveryClient;
+
+    @Test
+    public void DiscoveryClientTest() {
+
+        //获得服务名
+        List<String> services = discoveryClient.getServices();
+        for (String service : services) {
+            System.out.println(service);
+            //根据服务名 获得服务实例信息
+            List<ServiceInstance> instances = discoveryClient.getInstances(service);
+            for (ServiceInstance instance : instances) {
+                System.out.println(instance.getHost());
+                System.out.println(instance.getPort());
+            }
+        }
+
+    }
+
+
+    @Test
+    public void NacosDiscoveryClientTest() {
+        List<String> services = nacosDiscoveryClient.getServices();
+        for (String service : services) {
+            System.out.println(service);
+            nacosDiscoveryClient.getInstances(service).forEach(instance -> {
+                System.out.println(instance.getHost());
+                System.out.println(instance.getPort());
+            });
+        }
+    }
+
+
+}
+```
+
+
+
+我们正常使用的时候，开启@EnableDiscoveryClient 就行。确保开启服务发现。后续使用的时候，我们不用单独的用服务发现的API去获取服务，而是集成好了。
+
+
+
+### RestTemplate 远程调用
+
+由于我们是微服务项目， product 项目和 order项目是分开的。
+
+处理这样的一个业务逻辑，生成订单的时候，需要product的数据。该怎么办，像是单体项目，我们直接在order 中引入productService去解决。但是现在两个业务时分开的怎么办？
+
+答案就是我们在创建订单的时候，去远程调用product 获取商品信息的接口。 怎么调用？可以使用RestTemplate。
+
+我们写两个接口，商品接口和订单接口。
+
+
+
+商品接口
+
+----
+
+
+
+```java
+@RestController
+@RequestMapping("/product")
+public class ProductController {
+
+    @Autowired
+    private ProductService productService;
+
+    @GetMapping("/{productId}")
+    public  Product getProduct(@PathVariable long productId){
+
+        return  productService.getProduct(productId);
+
+    }
+
+}
+```
+
+```java
+@Service
+public class ProductServiceImpl implements ProductService {
+
+
+    @Override
+    public Product getProduct(long productId) {
+        Product product = new Product();
+
+        product.setId(productId);
+        product.setPrice(BigDecimal.valueOf(100));
+        product.setProductName("小苹果");
+        product.setNum(5);
+
+        return product;
+    }
+}
+```
+
+测试
+
+![image-20250216170932511](images/readme.assets/image-20250216170932511.png)
+
+同时其他副本下也可以
+
+![image-20250216171021959](images/readme.assets/image-20250216171021959.png)
+
+----
+
+
+
+订单接口
+
+```java
+@RestController
+@RequestMapping("/order")
+public class OrderController {
+
+
+    @Autowired
+    private OrderService orderService;
+
+    /**
+     * 创建订单
+     * @param userId
+     * @param productId
+     * @return
+     */
+    @GetMapping("/create")
+    public Order createOrder(@RequestParam("userId") Long userId, @RequestParam("productId") Long productId) {
+
+        return orderService.getOrder(userId,productId);
+    }
+
+
+}
+```
+
+
+
+```java
+@Service
+@Slf4j
+public class OrderServiceImpl implements OrderService {
+
+
+    @Autowired
+    private RestTemplate restTemplate;
+
+    @Autowired
+    private DiscoveryClient   discoveryClient;
+    @Override
+    public Order getOrder(Long userId, Long productId) {
+
+
+        Order order = new Order();
+        order.setId(2025L);
+        order.setUserId(userId);
+
+        order.setUsername("hnsqls");
+
+        order.setAddr("河南商丘");
+
+
+//  todo 调用商品表计算
+        Product product = getProductFromRemote(productId);
+        int num = product.getNum();
+        BigDecimal price = product.getPrice();
+        BigDecimal money = new BigDecimal(num).multiply(price);
+        order.setTotalPrice(money);
+        List<Product> products = new ArrayList<>();
+        products.add(product);
+        order.setProducts(products);
+        return order;
+    }
+
+
+    //远程调用
+    public Product getProductFromRemote(Long productId){
+       
+
+        List<ServiceInstance> instances = discoveryClient.getInstances("service-product");
+            ServiceInstance serviceInstance = instances.get(0);
+        String url = "http://"+serviceInstance.getHost()+":"+serviceInstance.getPort()+"/product/"+productId;
+              log.info("远程调用商品服务，获取商品信息，url:{}",url);
+
+
+        return restTemplate.getForObject(url, Product.class);
+
+    }
+}
+```
+
+注意 要配置RestTemplate (建议使用配置类来管理)
+
+```java
+@Configuration
+public class RestTemplateConfig {
+
+    @Bean
+    public RestTemplate restTemplate(){
+        return new RestTemplate();
+    }
+
+
+}
+```
+
+
+
+测试
+
+![image-20250216175242691](images/readme.assets/image-20250216175242691.png)
+
+但是通过日志，发现一个问题，就是我们的调用的远程服务，永远都是一个，
+
+![image-20250216175425571](images/readme.assets/image-20250216175425571.png)
+
+因为我们在代码中写死了都是永远调用存活实例的第一个。
+
+```java
+ ServiceInstance serviceInstance = instances.get(0);
+```
+
+
+
+我们想要负载均衡的调用远程服务怎么办？
+
+我们可以自己实现负载均衡的算法。或者使用 **LoadBalancerClient**
+
+#### LoadBalancerClient
+
+`LoadBalancerClient` 是 Spring Cloud 提供的一个接口，用于在客户端实现负载均衡。它是 Spring Cloud 负载均衡机制的核心组件之一，允许开发者从服务注册中心（如 Eureka、Consul 等）获取服务实例，并根据负载均衡策略选择一个实例进行调用。
+
+
+
+`LoadBalancerClient`  但是并没有提供实例, 需要引入依赖
+
+1. 引入依赖
+
+```xml
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-loadbalancer</artifactId>
+</dependency>
+```
+
+2. 测试类
+
+```java
+@SpringBootTest
+public class LoadBalanceTest {
+
+    @Autowired
+    private LoadBalancerClient loadBalancerClient;
+
+    @Test
+    public void testLoadBalance() {
+
+        //choose(serviceId) 只选择一个实例
+        for (int i = 0; i < 10; i++) {
+            ServiceInstance choose = loadBalancerClient.choose("service-product");
+//        System.out.println(choose.getHost() + choose.getPort());
+            System.out.println(choose.getUri());
+        }
+        
+    }
+}
+```
+
+![image-20250216184931902](images/readme.assets/image-20250216184931902.png)
+
+可以看出完成了负载均衡。 主要是通过其提供的choose方法，随机的获取一个实例。
+
+3. 改造业务
+
+上述测试代码，完成负载均衡，就是使用了LoadBalanceClinet.choose方法，代替我们之前的Discovery.getInstance(serviceId).get(0)的方法。
+
+需要注意的是，引入spring-cloud-starter-loadbalancer 依赖。才能获得到LoadBalanceClinet的实现类。
+
+以下是改造后的代码
+
+```java
+  //2.远程调用
+    public Product getProductFromRemoteWithLoadBalance(Long productId){
+
+
+//        List<ServiceInstance> instances = discoveryClient.getInstances("service-product");
+//
+//        ServiceInstance serviceInstance = instances.get(0);
+//        String url = "http://"+serviceInstance.getHost()+":"+serviceInstance.getPort()+"/product/"+productId;
+
+        ServiceInstance instance = loadBalancerClient.choose("service-product");
+        String url = "http://"+instance.getHost()+":"+instance.getPort()+"/product/"+productId;
+
+
+        log.info("远程调用商品服务，获取商品信息，url:{}",url);
+        return restTemplate.getForObject(url, Product.class);
+
+    }
+```
+
+
+
+测试： 成功的完成了负载均衡
+
+![image-20250216185736132](images/readme.assets/image-20250216185736132.png)
+
+
+
+#### 基于注解 @LoadBalanced
+
+`@LoadBalanced` 默认使用 **轮询（Round Robin）** 策略来选择服务实例。如果你需要自定义负载均衡策略，可以通过配置实现。
+
+当然还是要引入 spring-cloud-starter-loadbalancer 依赖。
+
+注解的作用范围实在，RedisTemplate上。我们RestTempalte默认是没有负载均衡的策略的，但是可以在添加该注解在上边。
+
+```java
+@Configuration
+public class RestTemplateConfig {
+    @Bean
+    @LoadBalanced //注解会为 RestTemplate 添加一个拦截器（LoadBalancerInterceptor），使其具备负载均衡的能力。
+    public RestTemplate restTemplate(){
+        return new RestTemplate();
+    }
+}
+
+```
+
+使用上的区别
+
+我们之前` restTemplate.getForObject(url,Product.class);`。 其中url，是已经拼接好的地址
+
+现在我们直接可以用service-product 来代替 ip:post
+
+代码实例
+
+```java
+ //3. @LoadBalanced远程调用
+
+    public Product getProductFromRemoteAnnotationLoadBalance(Long productId){
+
+
+//        List<ServiceInstance> instances = discoveryClient.getInstances("service-product");
+//
+//        ServiceInstance serviceInstance = instances.get(0);
+//        String url = "http://"+serviceInstance.getHost()+":"+serviceInstance.getPort()+"/product/"+productId;
+        String url = "http://service-product/product/"+productId;
+
+        log.info("远程调用商品服务，获取商品信息，url:{}",url);
+
+
+        return restTemplate.getForObject(url,Product.class);
+
+    }
+
+}
+
+```
+
+#### Nacos宕机服务还能远程调用成功吗？
+
+说一下，远程调用的流程。首先会请求到nacos，从nacos获取请求的远程地址，然后根据这个地址去调用请求。这样每次发送远程调用都是两个请求，性能比较低，这里远程调用有优化，会把从nacos查到的数据，缓存到内存中，只有第一次发送nacos请求，之后缓存到本地，就不用再次找nacos发现服务。同时对本地的缓存和nacos服务绑定，可以检测到nacos的变化，变化后要重启去请求naocs。
+
+回到问题：nacos宕机服务还能远程调用吗？ 如果是第一次请求，那就不行。 如果不是第一次请求，有缓存，还是可以调用成功的。
+
+
+
+
+
+### 分布式全局唯一id
+
+ 典型的业务应用，订单id。订单的数据量很大的时候，数据库要分表，那订单id还能依赖数据库自增吗？显然不能，会有冲突问题。
+
+随着我们商城规模越来越大，mysql的单表的容量不宜超过500W，数据量过大之后，我们要进行拆库拆表，但拆分表了之后，他们从逻辑上讲他们是同一张表，所以他们的id是不能一样的， 于是乎我们需要保证id的唯一性。 
+
+全局唯一ID生成器， 是在分布式系统下用来生成全局唯一ID的工具，一般要满足以下特性
+
+1. **唯一性**：ID 必须在全局范围内唯一。
+2. **高性能**：生成 ID 的速度要快，不能成为系统瓶颈。
+3. **高可用**：ID 生成服务必须高可用，避免单点故障。
+4. **趋势递增**：ID 最好是有序的，便于数据库索引和排序。
+5. **可扩展性**：能够支持大规模分布式系统。
+
+
+
+技术选型：
+
+**uuid** ：实现简单能确保唯一性，高可用性，但是不能保证顺序性，ID过长会导致存储和索引效率低下。
+
++ **工作原理**：UUID是通过一系列算法生成的128位数字，通常基于时间戳、计算机硬件标识符、随机数等元素。
++ **优点**：实现简单，无需网络交互，保证了ID的全球唯一性。
++ **缺点**：通常不能保证顺序性，ID较长，可能导致存储和索引效率低下。同时，基于MAC地址生成UUID的算法可能会造成MAC地址泄露。
+
+**机器号+数据库自增**：不能满足高并发需求。
+
++ **工作原理**：
+
+1. **机器号分配**：每台参与分布式系统的机器都会分配到一个唯一的机器号。这个机器号可以是基于机器的硬件信息（如MAC地址）生成的哈希值，或者是某个事先分配好的唯一编号。机器号的作用是确保在同一时间点上，不同机器生成的ID不会因自增部分而冲突。
+2. **数据库自增**
+3. **ID生成**：生成ID时，将机器号和当前数据库自增的数值组合起来。通常，机器号会作为ID的前缀，而数据库自增的数值则作为ID的后缀。
+
++ **优点**：实现简单，无需网络交互，保证了ID的全局唯一性，且顺序性。
++ **缺点**：在高并发场景下，数据库可能成为性能瓶颈。**单点故障风险**：如果数据库成为系统的单点故障，那么ID的生成也会受到影响。
+
+**redis生成**：INCRBy生成自增。能保证顺序性，唯一性，高性能，高可用，但是占用带宽。
+
++ **工作原理**：利用Redis的原子操作（如INCR和INCRBY）来生成唯一的递增数值。
++ **优点**：快速、简单且易于扩展；支持高并发环境；不依赖于数据库。
++ **缺点**：依赖于外部服务（Redis），需要管理和维护额外的基础设施。同时，每次生成ID都需要向Redis进行请求，占用带宽。
+
+**Snowflake（雪花算法）**：
+
+1. + **工作原理**：Twitter开发的一种生成64位ID的服务，基于时间戳、节点ID和序列号。时间戳保证了ID的唯一性和顺序性，节点ID保证了在多机环境下的唯一性。
+
+   1. **时间戳部分**：雪花算法中的ID包含了一个41位的时间戳部分（精确到毫秒级），这使得算法能够支持长达69年的唯一性。由于时间戳是递增的，因此生成的ID在整体上也会按照时间顺序递增。
+   2. **序列号部分**：在同一毫秒内，如果有多个ID生成请求，雪花算法会通过序列号部分来区分这些ID。序列号是一个12位的计数顺序号，支持每个节点每毫秒产生4096个唯一的ID序号。这确保了即使在同一毫秒内，生成的ID也是唯一的，并且由于时间戳的递增性，这些ID在整体上仍然保持自增排序。
+
+   + **优点**：ID有时间顺序，长度适中，生成速度快。
+   + **缺点**：对系统时钟有依赖，时钟回拨会导致ID冲突。
+
+因为我们是订单，首先要满足的就是高可用，高性能，然后就是id是自增的为了数据库存储索引以及查询的效率。那么满足条件的就是雪花算法和redis生成。
+
+参考雪花算法利用redis 生成。
+
+为了增加ID的安全性，我们可以不直接使用Redis自增的数值，而是拼接一些其它信息：
+
+![image-20250217001639512](images/readme.assets/image-20250217001639512.png)
+
+头部分：符号位：1bit，永远为0
+
+时间戳：31bit，以秒为单位，可以使用69年
+
+序列号：32bit，秒内的计数器，支持每秒产生2^32个不同ID
+
+
+
+序列号：需要注意的是，redis的自增是64位，但是只能存下32位
+
+所以我们不能只使用一个key，然后一直让他自增，可能会超过上限
+
+我们通常使用天来拼接key，一天一个key，这样不仅解决了超上限的问题，也方便统计。
+
+实现demo
+
+----
+
+```java
+/**
+ * 生成全局唯一id
+ *
+ */
+@Component
+public class RedisIdWorker {
+    //初始时间戳
+    private  static final long BEGIN_TIMESTAMP = 1722470400L;
+
+    /**
+     * 序列号的位数
+     */
+
+    private static final int COUNT_BITS = 32;
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    /**
+     * 创建全局唯一id
+     * @param keyPrefix
+     * @return
+     */
+    public long nextId(String keyPrefix){
+
+        //生成时间戳
+        LocalDateTime now = LocalDateTime.now();
+        long nowSecond = now.toEpochSecond(ZoneOffset.UTC);
+        long timestamp = nowSecond - BEGIN_TIMESTAMP;
+
+        //生成序列号
+        String date = now.format(DateTimeFormatter.ofPattern("yyyy:MM:dd"));
+        long count = stringRedisTemplate.opsForValue().increment("icr:" + keyPrefix + ":" + date);
+
+        //拼接并返回
+        return timestamp<<COUNT_BITS |count;
+
+    }
+
+    /**
+     * 获取初始时间 秒
+     * @param args
+     */
+//    public static void main(String[] args) {
+//        LocalDateTime localDateTime = LocalDateTime.of(2024, 8, 1, 0, 0, 0);
+//
+//        long second = localDateTime.toEpochSecond(ZoneOffset.UTC);
+//        System.out.println("second = " + second);
+//
+//
+//    }
+
+}
+
+```
+
+
+
+### 总结
+
+MQ没学，不太清楚那个课程。（有没有MQ推荐的课程）
+
+写总结速度有点慢了。看着代码挺简单，自己做起来就很慢，还有各种问题，多写吧，提升熟练度。
+
+没看八股。
+
+> 明日任务
+
+Nacos 配置中心 （1.5h） OpenFeign (2h)  八股（上午1h，下午1h, 晚上1h） 每日一题（1h）。  优惠卷秒杀乐观锁，一人一单（1h） 
+
+投满简历。冲冲冲！
+
+早点睡觉。
