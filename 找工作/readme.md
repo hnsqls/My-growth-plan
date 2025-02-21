@@ -4588,3 +4588,734 @@ openFeign ❌
 
 早点睡觉！
 
+
+
+## Day 16
+
+
+
+>  今日任务
+
+面试 ： 
+
+* 八股（1h + 1h + 1h）SpringBoot(40min) SpringCloud(1h)  操作系统（1h）
+* 项目 （智能知识库0.5h + 分布式锁 2h）
+* 投递 100（2h）
+
+提升： Vue
+
+
+
+### 总结
+
+面试总结
+
+vue 路由的使用
+
+八股文
+
+投递：90 +
+
+投递优点消耗我的心态了，导致感觉没学多少东西。
+
+还是要以学习为主，优先把简历上的知识弄明白。项目亮点的设计与实现整体思路和具体代码都应该非常熟悉，今天的面试都篇具体的操作。
+
+对于每日学习的记录还是不能光泛泛的记录做了什么，还是要向之前一样，学了什么，实现的思路以及具体的代码也要记录下来。不然面试的时候自己的逻辑不清晰。
+
+
+
+
+
+## Day17
+
+### AOP 的使用
+
+什么是AOP:AOP是一种面向切面编程的思想，具体来说就是将与具体业务无关但影响多个对象的公用的逻辑的代码抽取并封装一个可重用的代码块。来减少代码的冗余。具体的应用来说就是 权限校验，日志，事务。
+
+#### 权限校验
+
+权限校验
+
+----
+
+权限校验怎么使用AOP,我们通过自定义注解，定义用户的身份，通过反射拿到注解的对象，判断其身份。 这是个公用的逻辑，然后我们将判断用户身份封装成一个AOP对象来用，代码如下
+
+首先定义权限注解
+
+```java
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface AuthCheck {
+
+    /**
+     * 必须有某个角色
+     *
+     * @return
+     */
+    String mustRole() default "";
+
+}
+```
+
+使用的话，一下例子，管理员可以对用户信息进行修改（封禁）
+
+```java
+ /**
+     * 更新用户
+     *
+     * @param userUpdateRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/update")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Boolean> updateUser(@RequestBody UserUpdateRequest userUpdateRequest,
+            HttpServletRequest request) {
+        if (userUpdateRequest == null || userUpdateRequest.getId() == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR);
+        }
+        User user = new User();
+        BeanUtils.copyProperties(userUpdateRequest, user);
+        boolean result = userService.updateById(user);
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        return ResultUtils.success(true);
+    }
+
+```
+
+通过AOP 来对使用@AuthCheck注解的方法进行代理，所代理的增强方法就是用户权限的校验。
+
+```java
+@Aspect
+@Component
+public class AuthInterceptor {
+
+    @Resource
+    private UserService userService;
+
+    /**
+     * 执行拦截
+     *
+     * @param joinPoint
+     * @param authCheck
+     * @return
+     */
+    @Around("@annotation(authCheck)")
+    public Object doInterceptor(ProceedingJoinPoint joinPoint, AuthCheck authCheck) throws Throwable {
+        String mustRole = authCheck.mustRole();
+        RequestAttributes requestAttributes = RequestContextHolder.currentRequestAttributes();
+        HttpServletRequest request = ((ServletRequestAttributes) requestAttributes).getRequest();
+        // 当前登录用户
+        User loginUser = userService.getLoginUser(request);
+        UserRoleEnum mustRoleEnum = UserRoleEnum.getEnumByValue(mustRole);
+        // 不需要权限，放行
+        if (mustRoleEnum == null) {
+            return joinPoint.proceed();
+        }
+        // 必须有该权限才通过
+        UserRoleEnum userRoleEnum = UserRoleEnum.getEnumByValue(loginUser.getUserRole());
+        if (userRoleEnum == null) {
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
+        }
+        // 如果被封号，直接拒绝
+        if (UserRoleEnum.BAN.equals(userRoleEnum)) {
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
+        }
+        // 必须有管理员权限
+        if (UserRoleEnum.ADMIN.equals(mustRoleEnum)) {
+            // 用户没有管理员权限，拒绝
+            if (!UserRoleEnum.ADMIN.equals(userRoleEnum)) {
+                throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
+            }
+        }
+        // 通过权限校验，放行
+        return joinPoint.proceed();
+    }
+}
+```
+
+tips:` @Around("@annotation(authCheck)")  和 @Around("@annotation(AuthCheck)")`的区别
+
+@Around("@annotation(authCheck)"),Spring AOP 自动将方法上的 `@AuthCheck` 注解注入到 `doInterceptor authCheck` 参数中。
+
+```java
+@Around("@annotation(authCheck)")
+    public Object doInterceptor(ProceedingJoinPoint joinPoint, AuthCheck authCheck) throws Throwable {
+            String mustRole = authCheck.mustRole();
+    }
+```
+
+@Around("@annotation(AuthCheck)")`就需要我们使用joinPoint 自己去获得注解的内容
+
+```java
+@Around("@annotation(AuthCheck)")
+    public Object doInterceptor(ProceedingJoinPoint joinPoint, AuthCheck authCheck) throws Throwable {
+        
+            String mustRole = authCheck.mustRole();
+        	// 获取方法签名
+			MethodSignature signature = (MethodSignature) joinPoint.getSignature();
+			// 获取方法对象
+			Method method = signature.getMethod();
+			// 获取方法上的 AuthCheck 注解
+			AuthCheck authCheck = method.getAnnotation(AuthCheck.class);
+    }
+```
+
+以上就是权限校验使用AOP的全过程
+
+-----
+
+
+
+#### 日志管理
+
+日志也是属于，不印象具体的业务逻辑，但又是公共处理的逻辑。可以抽取并封装一个模块，来减少代码的耦合。
+
+```java
+/**
+ * 请求响应日志 AOP
+
+ **/
+@Aspect
+@Component
+@Slf4j
+public class LogInterceptor {
+
+    /**
+     * 执行拦截
+     */
+    @Around("execution(* com.ls.mianshidog.controller.*.*(..))")
+    public Object doInterceptor(ProceedingJoinPoint point) throws Throwable {
+        // 计时
+        StopWatch stopWatch = new StopWatch();
+        stopWatch.start();
+        // 获取请求路径
+        RequestAttributes requestAttributes = RequestContextHolder.currentRequestAttributes();
+        HttpServletRequest httpServletRequest = ((ServletRequestAttributes) requestAttributes).getRequest();
+        // 生成请求唯一 id
+        String requestId = UUID.randomUUID().toString();
+        String url = httpServletRequest.getRequestURI();
+        // 获取请求参数
+        Object[] args = point.getArgs();
+        String reqParam = "[" + StringUtils.join(args, ", ") + "]";
+        // 输出请求日志
+        log.info("request start，id: {}, path: {}, ip: {}, params: {}", requestId, url,
+                httpServletRequest.getRemoteHost(), reqParam);
+        // 执行原方法
+        Object result = point.proceed();
+        // 输出响应日志
+        stopWatch.stop();
+        long totalTimeMillis = stopWatch.getTotalTimeMillis();
+        log.info("request end, id: {}, cost: {}ms", requestId, totalTimeMillis);
+        return result;
+    }
+}
+```
+
+通过以上两个例子，可以说出对AOP的理解以及使用，还有自定义注解的使用。
+
+
+
+
+
+### ElasticeSearch 的使用
+
+由于我的项目是篇内容型的网站，为了提高查询的效率，以及可用性，想要实现全文分词搜索。
+
+当然Mysql也可以实现全文分词搜索。
+
+全文模糊搜索比如说like %text%，要包text含连续的字段。
+
+```sql
+SELECT * FROM articles WHERE content LIKE '%全文搜索%';
+
+LIKE '%关键词%' 无法利用索引，查询速度较慢。
+当数据量较大时，性能会明显下降。
+不能提供相关性排序。
+```
+
+分词搜索呢？就是将text查分成词条，搜索。
+
+可以使用 Mysql FULLTEXT索引。
+
+```sql
+CREATE DATABASE fulltext_search_demo;
+USE fulltext_search_demo;
+
+CREATE TABLE articles (
+id INT AUTO_INCREMENT PRIMARY KEY,
+title VARCHAR(255),
+content TEXT,
+FULLTEXT(title, content)  -- 创建全文索引
+);
+
+INSERT INTO articles (title, content) VALUES
+('Elasticsearch 教程', 'Elasticsearch 是一个开源的全文搜索引擎。'),
+('MySQL 全文搜索', 'MySQL 提供 FULLTEXT 索引用于全文检索。'),
+('Python 搜索库 Whoosh', 'Whoosh 是一个轻量级的全文搜索库，适用于 Python 应用。'),
+('全文搜索介绍', '全文搜索是一种高效的信息检索技术。');
+
+
+SELECT * FROM articles WHERE MATCH(title, content) AGAINST('全文搜索');
+
+```
+
+但是mysql 不支持中文的分词 启用Ngram 插件。
+
+如果你使用 **MySQL 5.7+ 或 MySQL 8.0**，可以启用 **Ngram 分词插件**，让 MySQL 支持中文分词。
+
+```sql
+ALTER TABLE articles ADD FULLTEXT(title, content) WITH PARSER ngram; 
+```
+
+**注意**: Ngram 分词默认会把每 2 个字符作为一个 "词"，对于中文搜索的效果比默认好，但不如专业搜索引擎（如 Elasticsearch）。
+
+```sql
+SELECT * FROM articles 
+WHERE MATCH(title, content) AGAINST('全文搜索') 
+AND content LIKE '%全文搜索%';
+
+# 这样可以提高查询的精确度，但性能仍然不如专业搜索引擎。
+```
+
+#### 数据的存放格式
+
+Elasticsearch 不是将信息存储为列式数据行，而是存储已序列化的复杂数据结构作为 JSON 文档。
+
+Elasticsearch 使用一种称为倒排索引的数据结构，它支持非常快速的全文搜索。**倒排索引**列出任何文档中出现的每个唯一单词，并标识所有每个单词出现的文档。
+
+**索引（Index）**：类似于关系型数据库中的表
+
+**映射（Mapping）**：用于定义 Elasticsearch 索引中文档字段的数据类型及其处理方式，类似于关系型数据库中的 Schema 表结构，帮助控制字段的存储、索引和查询行为。
+
+**文档（Document）**：索引中的每条记录，类似于数据库中的行。文档以 JSON 格式存储。
+
+**字段（Field）**：文档中的每个键值对，类似于数据库中的列。
+
+集群（Cluster）：多个节点组成的群集，用于存储数据并提供搜索功能。集群中的每个节点都可以处理数据。
+
+分片（Shard）：为了实现横向扩展，ES 将索引拆分成多个分片，每个分片可以分布在不同节点上。
+
+副本（Replica）：分片的复制品，用于提高可用性和容错性。
+
+
+
+知道数据的存放格式，然后就是如何根据Mysql数据库，设计ES数据库，也就是怎么设计他的映射。
+
+主要就是 ：text（长文本，需要分词的），keyword（不需要分词），long（长整数）。
+
+**字段类型**：定义每个字段的数据类型。常见类型包括：
+
++ `text`：用于全文搜索的字符串类型，会进行分词。
++ `keyword`：用于精确匹配的字符串类型，不进行分词。
++ `date`：日期类型，支持各种日期格式。
++ `integer`, `long`, `float`, `double`：数值类型。
++ `boolean`：布尔值类型。
++ `object`：对象类型，适合嵌套复杂结构。
+
+数据库如下
+
+```sql
+-- 题目表
+create table if not exists question
+(
+    id         bigint auto_increment comment 'id' primary key,
+    title      varchar(256)                       null comment '标题',
+    content    text                               null comment '内容',
+    tags       varchar(1024)                      null comment '标签列表（json 数组）',
+    answer     text                               null comment '推荐答案',
+    userId     bigint                             not null comment '创建用户 id',
+    editTime   datetime default CURRENT_TIMESTAMP not null comment '编辑时间',
+    createTime datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete   tinyint  default 0                 not null comment '是否删除',
+    index idx_title (title),
+    index idx_userId (userId)
+) comment '题目' collate = utf8mb4_unicode_ci;
+```
+
+ES mapping如下
+
+```json
+{
+  "aliases": {
+    "question": {}
+  },
+  "mappings": {
+    "properties": {
+      "title": {
+        "type": "text",
+        "analyzer": "ik_max_word",
+        "search_analyzer": "ik_smart",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "content": {
+        "type": "text",
+        "analyzer": "ik_max_word",
+        "search_analyzer": "ik_smart"
+      },
+      "tags": {
+        "type": "keyword"
+      },
+      "answer": {
+        "type": "text",
+        "analyzer": "ik_max_word",
+        "search_analyzer": "ik_smart"
+      },
+      "userId": {
+        "type": "long"
+      },
+      "editTime": {
+        "type": "date",
+        "format": "yyyy-MM-dd HH:mm:ss"
+      },
+      "createTime": {
+        "type": "date",
+        "format": "yyyy-MM-dd HH:mm:ss"
+      },
+      "updateTime": {
+        "type": "date",
+        "format": "yyyy-MM-dd HH:mm:ss"
+      },
+      "isDelete": {
+        "type": "keyword"
+      }
+    }
+  }
+}
+
+```
+
+* tips:  中文分词器 开源地址：https://github.com/medcl/elasticsearch-analysis-ik 进入 ES目录/pluglin 安装4
+
+创建索引
+
+```json
+PUT /question_v1
+{
+  "mappings": {
+    "properties": {
+      ...
+    }
+  }
+}
+```
+
+#### 操作ES库
+
+> 查询语法DSL
+
+```JAVA
+{
+  "query": {
+    "match": {
+      "message": "Elasticsearch 是强大的"
+    }
+  }
+}
+```
+
+match方法是全文分词查询。这会对 `message` 字段进行分词，并查找包含 "Elasticsearch" 和 "强大" 词条的文档。
+
+
+
+| **查询条件**   | **介绍**                                                     | **示例**                                                     | **用途**                                           |
+| -------------- | ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
+| `match`        | 用于全文检索，将查询字符串进行分词并匹配文档中对应的字段。   | `{ "match": { "content": "学习ElasticSearch" } }`            | 适用于全文检索，分词后匹配文档内容。               |
+| `term`         | 精确匹配查询，不进行分词。通常用于结构化数据的精确匹配，如数字、日期、关键词等。 | `{ "term": { "status": "active" } }`                         | 适用于字段的精确匹配，如状态、ID、布尔值等。       |
+| `terms`        | 匹配多个值中的任意一个，相当于多个 `term` 查询的组合。       | `{ "terms": { "status": ["active", "pending"] } }`           | 适用于多值匹配的场景。                             |
+| `range`        | 范围查询，常用于数字、日期字段，支持大于、小于、区间等查询。 | `{ "range": { "age": { "gte": 18, "lte": 30 } } }`           | 适用于数值或日期的范围查询。                       |
+| `bool`         | 组合查询，通过 `must`、`should`、`must_not` 等组合多个查询条件。 | `{ "bool": { "must": [ { "term": { "status": "active" } }, { "range": { "age": { "gte": 18 } } } ] } }` | 适用于复杂的多条件查询，可以灵活组合。             |
+| `wildcard`     | 通配符查询，支持 `*` 和 `?`，前者匹配任意字符，后者匹配单个字符。 | `{ "wildcard": { "name": "鱼*" } }`                          | 适用于部分匹配的查询，如模糊搜索。                 |
+| `prefix`       | 前缀查询，匹配以指定前缀开头的字段内容。                     | `{ "prefix": { "name": "鱼" } }`                             | 适用于查找以指定字符串开头的内容。                 |
+| `fuzzy`        | 模糊查询，允许指定程度的拼写错误或字符替换。                 | `{ "fuzzy": { "name": "yupi~2" } }`                          | 适用于处理拼写错误或不完全匹配的查询。             |
+| `exists`       | 查询某字段是否存在。                                         | `{ "exists": { "field": "name" } }`                          | 适用于查找字段存在或缺失的文档。                   |
+| `match_phrase` | 短语匹配查询，要求查询的词语按顺序完全匹配。                 | `{ "match_phrase": { "content": "鱼皮 帅小伙" } }`           | 适用于严格的短语匹配，词语顺序和距离都严格控制。   |
+| `match_all`    | 匹配所有文档。                                               | `{ "match_all": {} }`                                        | 适用于查询所有文档，通常与分页配合使用。           |
+| `ids`          | 基于文档 ID 查询，支持查询特定 ID 的文档。                   | `{ "ids": { "values": ["1", "2", "3"] } }`                   | 适用于根据文档 ID 查找特定文档。                   |
+| `geo_distance` | 地理位置查询，基于地理坐标和指定距离查询。                   | `{ "geo_distance": { "distance": "12km", "location": { "lat": 40.73, "lon": -74.1 } } }` | 适用于根据距离计算查找地理位置附近的文档。         |
+| `aggregations` | 聚合查询，用于统计、计算和分组查询，类似 SQL 中的 `GROUP BY`。 | `{ "aggs": { "age_stats": { "stats": { "field": "age" } } } }` | 适用于统计和分析数据，比如求和、平均值、最大值等。 |
+
+java 操作ES 库
+
+1. 引入依赖
+
+```xml
+<!-- elasticsearch-->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-elasticsearch</artifactId>
+</dependency>
+
+```
+
+2.编写配置
+
+```yaml
+spring:
+  elasticsearch:
+    uris: http://xxx:9200
+    username: elastic
+    password: elastic
+
+```
+
+3.实体和ES库映射
+
+```java
+@Document(indexName = "question")
+@Data
+public class QuestionEsDTO implements Serializable {
+
+    private static final String DATE_TIME_PATTERN = "yyyy-MM-dd HH:mm:ss";
+
+    /**
+     * id
+     */
+    @Id
+    private Long id;
+
+    /**
+     * 标题
+     */
+    private String title;
+
+    /**
+     * 内容
+     */
+    private String content;
+
+    /**
+     * 答案
+     */
+    private String answer;
+
+    /**
+     * 标签列表
+     */
+    private List<String> tags;
+
+    /**
+     * 创建用户 id
+     */
+    private Long userId;
+
+    /**
+     * 创建时间
+     */
+    @Field(type = FieldType.Date, format = {}, pattern = DATE_TIME_PATTERN)
+    private Date createTime;
+
+    /**
+     * 更新时间
+     */
+    @Field(type = FieldType.Date, format = {}, pattern = DATE_TIME_PATTERN)
+    private Date updateTime;
+
+    /**
+     * 是否删除
+     */
+    private Integer isDelete;
+
+    private static final long serialVersionUID = 1L;
+
+    /**
+     * 对象转包装类
+     *
+     * @param question
+     * @return
+     */
+    public static QuestionEsDTO objToDto(Question question) {
+        if (question == null) {
+            return null;
+        }
+        QuestionEsDTO questionEsDTO = new QuestionEsDTO();
+        BeanUtils.copyProperties(question, questionEsDTO);
+        String tagsStr = question.getTags();
+        if (StringUtils.isNotBlank(tagsStr)) {
+            questionEsDTO.setTags(JSONUtil.toList(tagsStr, String.class));
+        }
+        return questionEsDTO;
+    }
+
+    /**
+     * 包装类转对象
+     *
+     * @param questionEsDTO
+     * @return
+     */
+    public static Question dtoToObj(QuestionEsDTO questionEsDTO) {
+        if (questionEsDTO == null) {
+            return null;
+        }
+        Question question = new Question();
+        BeanUtils.copyProperties(questionEsDTO, question);
+        List<String> tagList = questionEsDTO.getTags();
+        if (CollUtil.isNotEmpty(tagList)) {
+            question.setTags(JSONUtil.toJsonStr(tagList));
+        }
+        return question;
+    }
+}
+
+```
+
+4.继承ElasticsearchRepository
+
+```java
+public interface QuestionEsDao 
+    extends ElasticsearchRepository<QuestionEsDTO, Long> {
+
+}
+```
+
+使用的例子
+
+同步ES 库
+
+```java
+// todo 取消注释开启任务
+@Component
+@Slf4j
+public class FullSyncQuestionToEs implements CommandLineRunner {
+
+    @Resource
+    private QuestionService questionService;
+
+    @Resource
+    private QuestionEsDao questionEsDao;
+
+    @Override
+    public void run(String... args) {
+        // 全量获取题目（数据量不大的情况下使用）
+        List<Question> questionList = questionService.list();
+        if (CollUtil.isEmpty(questionList)) {
+            return;
+        }
+        // 转为 ES 实体类
+        List<QuestionEsDTO> questionEsDTOList = questionList.stream()
+                .map(QuestionEsDTO::objToDto)
+                .collect(Collectors.toList());
+        // 分页批量插入到 ES
+        final int pageSize = 500;
+        int total = questionEsDTOList.size();
+        log.info("FullSyncQuestionToEs start, total {}", total);
+        for (int i = 0; i < total; i += pageSize) {
+            // 注意同步的数据下标不能超过总数据量
+            int end = Math.min(i + pageSize, total);
+            log.info("sync from {} to {}", i, end);
+            questionEsDao.saveAll(questionEsDTOList.subList(i, end));
+        }
+        log.info("FullSyncQuestionToEs end, total {}", total);
+    }
+}
+
+```
+
+全文搜索
+
+```java
+@Override
+public Page<Question> searchFromEs(QuestionQueryRequest questionQueryRequest) {
+    // 获取参数
+    Long id = questionQueryRequest.getId();
+    Long notId = questionQueryRequest.getNotId();
+    String searchText = questionQueryRequest.getSearchText();
+    List<String> tags = questionQueryRequest.getTags();
+    Long questionBankId = questionQueryRequest.getQuestionBankId();
+    Long userId = questionQueryRequest.getUserId();
+    // 注意，ES 的起始页为 0
+    int current = questionQueryRequest.getCurrent() - 1;
+    int pageSize = questionQueryRequest.getPageSize();
+    String sortField = questionQueryRequest.getSortField();
+    String sortOrder = questionQueryRequest.getSortOrder();
+
+    // 构造查询条件
+    BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
+    // 过滤
+    boolQueryBuilder.filter(QueryBuilders.termQuery("isDelete", 0));
+    if (id != null) {
+        boolQueryBuilder.filter(QueryBuilders.termQuery("id", id));
+    }
+    if (notId != null) {
+        boolQueryBuilder.mustNot(QueryBuilders.termQuery("id", notId));
+    }
+    if (userId != null) {
+        boolQueryBuilder.filter(QueryBuilders.termQuery("userId", userId));
+    }
+    if (questionBankId != null) {
+        boolQueryBuilder.filter(QueryBuilders.termQuery("questionBankId", questionBankId));
+    }
+    // 必须包含所有标签
+    if (CollUtil.isNotEmpty(tags)) {
+        for (String tag : tags) {
+            boolQueryBuilder.filter(QueryBuilders.termQuery("tags", tag));
+        }
+    }
+    // 按关键词检索
+    if (StringUtils.isNotBlank(searchText)) {
+        boolQueryBuilder.should(QueryBuilders.matchQuery("title", searchText));
+        boolQueryBuilder.should(QueryBuilders.matchQuery("content", searchText));
+        boolQueryBuilder.should(QueryBuilders.matchQuery("answer", searchText));
+        boolQueryBuilder.minimumShouldMatch(1);
+    }
+    // 排序
+    SortBuilder<?> sortBuilder = SortBuilders.scoreSort();
+    if (StringUtils.isNotBlank(sortField)) {
+        sortBuilder = SortBuilders.fieldSort(sortField);
+        sortBuilder.order(CommonConstant.SORT_ORDER_ASC.equals(sortOrder) ? SortOrder.ASC : SortOrder.DESC);
+    }
+    // 分页
+    PageRequest pageRequest = PageRequest.of(current, pageSize);
+    // 构造查询
+    NativeSearchQuery searchQuery = new NativeSearchQueryBuilder()
+            .withQuery(boolQueryBuilder)
+            .withPageable(pageRequest)
+            .withSorts(sortBuilder)
+            .build();
+    SearchHits<QuestionEsDTO> searchHits = elasticsearchRestTemplate.search(searchQuery, QuestionEsDTO.class);
+    // 复用 MySQL 的分页对象，封装返回结果
+    Page<Question> page = new Page<>();
+    page.setTotal(searchHits.getTotalHits());
+    List<Question> resourceList = new ArrayList<>();
+    if (searchHits.hasSearchHits()) {
+        List<SearchHit<QuestionEsDTO>> searchHitList = searchHits.getSearchHits();
+        for (SearchHit<QuestionEsDTO> questionEsDTOSearchHit : searchHitList) {
+            resourceList.add(QuestionEsDTO.dtoToObj(questionEsDTOSearchHit.getContent()));
+        }
+    }
+    page.setRecords(resourceList);
+    return page;
+}
+
+```
+
+
+
+### 总结
+
+投递：50   (1039-1065    70-94)
+
+项目八股 ES库的使用    
+
+面试总结 考察无八股，纯手写业务增删改查。感觉写的不熟练，多练练手。
+
+在学会Vue 就睡觉。
+
+
+
+早上8点起床，明天收拾收拾东西去上海。
+
+复习一下Sentinel 的使用，以及黑名单的实现（了解或者实现以下，pull配置的方式）（1h）
+
+写几道Sql题。
+
+八股文 2h
+
+用户中心 登录注册，前后端都实现。
+
