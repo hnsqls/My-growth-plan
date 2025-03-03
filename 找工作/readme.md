@@ -5389,3 +5389,4138 @@ Sql，项目，Vue, 优化简历，八股，面试。
 
 
 
+## Day 20
+
+> 今日任务
+
+Sql，项目，Vue, 优化简历，八股，面试。
+
+### sql
+
+9：30-10：00
+
+分组[1581. 进店却未进行过交易的顾客 - 力扣（LeetCode）](https://leetcode.cn/problems/customer-who-visited-but-did-not-make-any-transactions/?envType=study-plan-v2&envId=sql-free-50)
+
+group by  字段 分组， count(*) 计算分组后根据分组字段的个数。
+
+
+
+### 八股
+
+11：00-12:00
+
+### 项目
+
+12:30-13:10
+
+#### 对接口整体限流
+
+1. 引入依赖
+
+```xml
+<dependency>
+    <groupId>com.alibaba.csp</groupId>
+    <artifactId>sentinel-core</artifactId>
+    <version>1.8.6</version>
+</dependency>
+```
+
+2. 项目与sentinel通信
+
+
+
+启动sentinel ```java -Dserver.port=8131 -jar sentinel-dashboard-1.8.6.jar```
+
++ 客户端需要引入 Transport 模块来与 Sentinel 控制台进行通信。您可以通过 `pom.xml` 引入 JAR 包:
+
+引入通信包
+
+```xml
+<dependency>
+    <groupId>com.alibaba.csp</groupId>
+    <artifactId>sentinel-transport-simple-http</artifactId>
+    <version>1.8.6</version>
+</dependency>
+```
+
++ 启动时加入 JVM 参数 `-Dcsp.sentinel.dashboard.server=consoleIp:port` 指定控制台地址和端口。更多的参数参见 [启动参数文档](https://sentinelguard.io/zh-cn/docs/startup-configuration.html)。
++ ![image-20250212162329792](images/readme.assets/image-20250212162329792-1741013432490.png)
++ 确保应用端有访问量.（发出一次请求，才能感知到监控）
+
+
+
+资源：listQuestionBankVOByPage 接口
+
+目的：限制经常访问的接口的请求频率，防止过多请求导致系统过载。
+
+限流规则：
+
++ 策略：整个接口每秒钟不超过 10 次请求
++ 阻塞操作：提示“系统压力过大，请耐心等待”
+
+熔断规则：
+
++ 熔断条件：如果接口异常率超过 10%，或者慢调用（响应时长 > 3 秒）的比例大于 20%，触发 60 秒熔断。
++ 熔断操作：直接返回本地数据（缓存或空数据）
+
+
+
+实战编写
+
+```java
+ 
+ /**
+     * 分页获取题库列表（封装类）
+     *
+     * @param questionBankQueryRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/list/page/vo")
+    @SentinelResource(value = "listQuestionBankVOByPage",blockHandler = "questionBankQpsSentinel",fallback = "questionBankFallback")
+    public BaseResponse<Page<QuestionBankVO>> listQuestionBankVOByPage(@RequestBody QuestionBankQueryRequest questionBankQueryRequest,
+                                                               HttpServletRequest request) {
+        long current = questionBankQueryRequest.getCurrent();
+        long size = questionBankQueryRequest.getPageSize();
+        // 限制爬虫
+        ThrowUtils.throwIf(size > 200, ErrorCode.PARAMS_ERROR);
+        // 查询数据库
+        Page<QuestionBank> questionBankPage = questionBankService.page(new Page<>(current, size),
+                questionBankService.getQueryWrapper(questionBankQueryRequest));
+        // 获取封装类
+        return ResultUtils.success(questionBankService.getQuestionBankVOPage(questionBankPage, request));
+    }
+
+// 限流
+
+    /**
+     *  查询题库列表限流 处理
+     * @param questionBankQueryRequest
+     * @param request
+     * @param ex
+     * @return
+     */
+    public static BaseResponse<Page<QuestionBankVO>> questionBankQpsSentinel(@RequestBody QuestionBankQueryRequest questionBankQueryRequest,
+                                                                       HttpServletRequest request, BlockException ex){
+        return ResultUtils.error(ErrorCode.SYSTEM_ERROR.getCode(), "限流系统压力过大，请耐心等待");
+
+
+    }
+
+    // 熔断
+
+    public static BaseResponse<Page<QuestionBankVO>> questionBankFallback(@RequestBody QuestionBankQueryRequest questionBankQueryRequest,
+                                                                      HttpServletRequest request, Throwable ex){
+        return ResultUtils.error(ErrorCode.SYSTEM_ERROR.getCode(), "查询题库列表熔断");
+
+    }
+```
+
+#### 对单ip限流
+
+资源：listQuestionVoByPage 接口
+
+限流规则：
+
++ 策略：每个 IP 地址每分钟允许查看题目列表的次数不能超过 60 次。
++ 阻塞操作：提示“访问过于频繁，请稍后再试”
+
+熔断规则：
+
++ 熔断条件：如果接口异常率超过 10%，或者慢调用（响应时长 > 3 秒）的比例大于 20%，触发 60 秒熔断。
++ 熔断操作：直接返回本地数据（缓存或空数据）
+
+由于需要针对每个用户进一步精细化限流，而不是整体接口限流，可以采用 [热点参数限流机制](https://sentinelguard.io/zh-cn/docs/parameter-flow-control.html)，允许根据参数控制限流触发条件。
+
+参考demo
+
+/**
+
+   * 分页获取题目列表（封装类） 限流
+
+
+```java
+/**
+     * 分页获取题目列表（封装类） 限流
+     *
+     * @param questionQueryRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/list/page/vo1")
+    public BaseResponse<Page<QuestionVO>> listQuestionVOByPageSentinel(@RequestBody QuestionQueryRequest questionQueryRequest,
+                                                               HttpServletRequest request) {
+        long current = questionQueryRequest.getCurrent();
+        long size = questionQueryRequest.getPageSize();
+        // 限制爬虫
+        ThrowUtils.throwIf(size > 20, ErrorCode.PARAMS_ERROR);
+
+        String remoteAddr = request.getRemoteAddr();
+        Entry entry = null;
+
+        try{
+            // 注册资源
+            entry = SphU.entry("listQuestionVOByPage", EntryType.IN, 1, remoteAddr);
+
+            // 被保护的资源
+            Page<Question> questionPage = questionService.page(new Page<>(current, size),
+                    questionService.getQueryWrapper(questionQueryRequest));
+            // 获取封装类
+            return ResultUtils.success(questionService.getQuestionVOPage(questionPage, request));
+        }
+        catch (Throwable ex){
+            //如果是业务报错
+            if (!BlockException.isBlockException(ex)) {
+                //上报 用于统计异常数
+                Tracer.trace(ex);
+                return ResultUtils.error(ErrorCode.SYSTEM_ERROR.getCode(), "系统异常");
+            }
+            //降级操作
+            if (ex instanceof DegradeException){
+                return ResultUtils.error(ErrorCode.SYSTEM_ERROR,"服务熔断 null");
+            }
+            // 限流操作
+            return ResultUtils.error(ErrorCode.SYSTEM_ERROR, "访问过于频繁，请稍后再试");
+        }finally {
+            if (entry != null) {
+                entry.exit(1, remoteAddr);
+            }
+        }
+    }
+```
+
+由于每次重启服务，在控制台都要编写规则，我们可以使用java代码指定规则。
+
+```java
+/**
+ *  限流 熔断规则
+ */
+@Component
+public class SentinelRulesManager {
+
+    @PostConstruct
+    public void initRules() {
+        initFlowRules();
+        initDegradeRules();
+    }
+
+    // 限流规则
+    public void initFlowRules() {
+        // 单 IP 查看题目列表限流规则
+        ParamFlowRule rule = new ParamFlowRule("listQuestionVOByPage")
+                .setParamIdx(0) // 对第 0 个参数限流，即 IP 地址
+                .setCount(20) // 每分钟最多 60 次
+                .setDurationInSec(60); // 规则的统计周期为 60 秒
+        ParamFlowRuleManager.loadRules(Collections.singletonList(rule));
+    }
+
+    // 降级规则
+    public void initDegradeRules() {
+        // 单 IP 查看题目列表熔断规则
+        DegradeRule slowCallRule = new DegradeRule("listQuestionVOByPage")
+                .setGrade(CircuitBreakerStrategy.SLOW_REQUEST_RATIO.getType())
+                .setCount(0.2) // 慢调用比例大于 20%
+                .setTimeWindow(60) // 熔断持续时间 60 秒
+                .setStatIntervalMs(30 * 1000) // 统计时长 30 秒
+                .setMinRequestAmount(10) // 最小请求数
+                .setSlowRatioThreshold(3); // 响应时间超过 3 秒
+
+        DegradeRule errorRateRule = new DegradeRule("listQuestionVOByPage")
+                .setGrade(CircuitBreakerStrategy.ERROR_RATIO.getType())
+                .setCount(0.1) // 异常率大于 10%
+                .setTimeWindow(60) // 熔断持续时间 60 秒
+                .setStatIntervalMs(30 * 1000) // 统计时长 30 秒
+                .setMinRequestAmount(10); // 最小请求数
+
+        // 加载规则
+        DegradeRuleManager.loadRules(Arrays.asList(slowCallRule, errorRateRule));
+    }
+}
+```
+
+### 面试
+
+1. 项目遇到的bug，怎么解决的
+
+我举的例子，sentinel，限流异常包括降级异常。
+
+2. java 的特点
+3. 继承和多态
+4. 定义接口默认的修饰词
+5. final的修饰词的作用
+6. 构造方法的作用
+7. 构造方法的特性
+   答：与类同名 2. 没有返回类型 3.支持重载
+8. ==和equals的区别
+
+* `==` 
+
+  * 比较对象时，比较对象的地址是否相同 
+  * 比较基本类型时，比较值是否相同
+
+* `equals` 方法
+
+  * 继承子Object类，也就是只有对象才有该方法
+
+  * 默认是比较对象的地址是否相同
+
+  * 比较对象的内容是否相同，通常如果我们自定义的对象，要想将对象的内容一样看相同，要重写equals方法
+
+  * 有的Java对象也提供了equals的重写，比如String
+
+    * ```java
+      	String s1 = new String("hello world");
+             String s2 = new String("hello world");
+             System.out.println(s1 == s2); //false
+             System.out.println(s1.equals(s2));//true
+       
+             String s3 = "hello";
+             String s4 = "hello";
+             System.out.println(s3 == s4); //true
+             System.out.println(s3.equals(s4)); //true
+      ```
+
+    * 为什么 s1 == s2  flase， 因为地址不一样
+
+    * 为什么s1.equals（s2）true, 不是说equals默认比较地址是否相同吗？明明地址不一样为啥还是相同呢？这是因为String已经重写了equals()方法
+
+    * ![image-20250224223315393](images/readme.assets/image-20250224223315393.png)
+
+    * 为什么 s3 == s4 是true。难道说他俩地址相同？确实是这样。因为字符串常量池的存在，在创建字符串时，先判断缓冲池中是否有一样的字符串，如果有就直接将其地址赋值到要创建的变量上，避免字符串额外的创建。如果使用new 方式来创建的话，即使常量池中存在也会创建一个新的对象。
+
+
+10. 线程的状态
+
+11. SpringCloud的特点
+
+12. 怎么远程调用
+
+13. Spring AOP的理解
+
+    什么是AOP:AOP是一种面向切面编程的思想，具体来说就是将与具体业务无关但影响多个对象的公用的逻辑的代码抽取并封装一个可重用的代码块。来减少代码的冗余。具体的应用来说就是 权限校验，日志，事务。
+
+    权限校验
+
+    ----
+
+    权限校验怎么使用AOP,我们通过自定义注解，定义用户的身份，通过反射拿到注解的对象，判断其身份。 这是个公用的逻辑，然后我们将判断用户身份封装成一个AOP对象来用，代码如下
+
+    首先定义权限注解
+
+    ```java
+    @Target(ElementType.METHOD)
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface AuthCheck {
+    
+        /**
+         * 必须有某个角色
+         *
+         * @return
+         */
+        String mustRole() default "";
+    
+    }
+    ```
+
+    使用的话，一下例子，管理员可以对用户信息进行修改（封禁）
+
+    ```java
+     /**
+         * 更新用户
+         *
+         * @param userUpdateRequest
+         * @param request
+         * @return
+         */
+        @PostMapping("/update")
+        @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+        public BaseResponse<Boolean> updateUser(@RequestBody UserUpdateRequest userUpdateRequest,
+                HttpServletRequest request) {
+            if (userUpdateRequest == null || userUpdateRequest.getId() == null) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR);
+            }
+            User user = new User();
+            BeanUtils.copyProperties(userUpdateRequest, user);
+            boolean result = userService.updateById(user);
+            ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+            return ResultUtils.success(true);
+        }
+    
+    ```
+
+    通过AOP 来对使用@AuthCheck注解的方法进行代理，所代理的增强方法就是用户权限的校验。
+
+    ```java
+    @Aspect
+    @Component
+    public class AuthInterceptor {
+    
+        @Resource
+        private UserService userService;
+    
+        /**
+         * 执行拦截
+         *
+         * @param joinPoint
+         * @param authCheck
+         * @return
+         */
+        @Around("@annotation(authCheck)")
+        public Object doInterceptor(ProceedingJoinPoint joinPoint, AuthCheck authCheck) throws Throwable {
+            String mustRole = authCheck.mustRole();
+            RequestAttributes requestAttributes = RequestContextHolder.currentRequestAttributes();
+            HttpServletRequest request = ((ServletRequestAttributes) requestAttributes).getRequest();
+            // 当前登录用户
+            User loginUser = userService.getLoginUser(request);
+            UserRoleEnum mustRoleEnum = UserRoleEnum.getEnumByValue(mustRole);
+            // 不需要权限，放行
+            if (mustRoleEnum == null) {
+                return joinPoint.proceed();
+            }
+            // 必须有该权限才通过
+            UserRoleEnum userRoleEnum = UserRoleEnum.getEnumByValue(loginUser.getUserRole());
+            if (userRoleEnum == null) {
+                throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
+            }
+            // 如果被封号，直接拒绝
+            if (UserRoleEnum.BAN.equals(userRoleEnum)) {
+                throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
+            }
+            // 必须有管理员权限
+            if (UserRoleEnum.ADMIN.equals(mustRoleEnum)) {
+                // 用户没有管理员权限，拒绝
+                if (!UserRoleEnum.ADMIN.equals(userRoleEnum)) {
+                    throw new BusinessException(ErrorCode.NO_AUTH_ERROR);
+                }
+            }
+            // 通过权限校验，放行
+            return joinPoint.proceed();
+        }
+    }
+    ```
+
+    tips:` @Around("@annotation(authCheck)")  和 @Around("@annotation(AuthCheck)")`的区别
+
+    @Around("@annotation(authCheck)"),Spring AOP 自动将方法上的 `@AuthCheck` 注解注入到 `doInterceptor authCheck` 参数中。
+
+    ```java
+    @Around("@annotation(authCheck)")
+        public Object doInterceptor(ProceedingJoinPoint joinPoint, AuthCheck authCheck) throws Throwable {
+                String mustRole = authCheck.mustRole();
+        }
+    ```
+
+    @Around("@annotation(AuthCheck)")`就需要我们使用joinPoint 自己去获得注解的内容
+
+    ```java
+    @Around("@annotation(AuthCheck)")
+        public Object doInterceptor(ProceedingJoinPoint joinPoint, AuthCheck authCheck) throws Throwable {
+            
+                String mustRole = authCheck.mustRole();
+            	// 获取方法签名
+    			MethodSignature signature = (MethodSignature) joinPoint.getSignature();
+    			// 获取方法对象
+    			Method method = signature.getMethod();
+    			// 获取方法上的 AuthCheck 注解
+    			AuthCheck authCheck = method.getAnnotation(AuthCheck.class);
+        }
+    ```
+
+    以上就是权限校验使用AOP的全过程.
+
+    ---
+
+    
+
+14. Tcp/IP协议
+
+15. 项目能支持多少QPS
+
+16. ES,hot-key的实现
+
+17. 分布式锁怎么用的
+
+18. 排序算法，快排，归并排序
+
+19. 反问  该职位是做什么，具体的业务是什么，技术栈是什么。
+
+
+
+### 总结
+
+投递 100+ 自动投递质量不高，还要选好合适的参数。
+
+sentinel的使用实战，Sql 分组操作 去重操作，以及执行顺序（from join where groupby having select  distinct  orderby  limit）
+
+线下面试经验：简历上的一定要都会。
+
+
+
+## Day 21
+
+### sql
+
+10：00-10：10 
+
+表的自连接，应用场景就是，我们想要使用表内的数据和表内的数据进行比较，而不是我们传一个参数和表比较，就可以将这个表，看作两个表，根据条件进行连接（比如说第几天和第几天相关联），在去根据条件比较
+
+[197. 上升的温度 - 力扣（LeetCode）](https://leetcode.cn/problems/rising-temperature/submissions/602885864/?envType=study-plan-v2&envId=sql-free-50)
+
+```sql
+select A.id
+    from Weather A
+    join Weather B 
+    on  A.recordDate = Date_add(B.recordDate,interval 1 Day)
+    where A.temperature > B.temperature;
+```
+
+10:10-10:40
+
+保留小数，round(xxx,3)
+
+[1661. 每台机器的进程平均运行时间 - 力扣（LeetCode）](https://leetcode.cn/problems/average-time-of-process-per-machine/?envType=study-plan-v2&envId=sql-free-50)
+
+```sql
+select A.machine_id as machine_id, round(avg(B.timestamp - A.timestamp), 3) processing_time
+    from Activity A
+    join Activity B
+    on A.machine_id = B.machine_id and A.process_id=B.process_id and A.activity_type!=B.activity_type and A.timestamp < B.timestamp
+    group by machine_id
+
+```
+
+对于复杂sql，慢慢拆分。
+
+10：40 - 11：20
+
+[1280. 学生们参加各科测试的次数 - 力扣（LeetCode）](https://leetcode.cn/problems/students-and-examinations/description/?envType=study-plan-v2&envId=sql-free-50)
+
+### 项目
+
+#### 一人一单功能的实现
+
+11：23 -  11：44
+
+```java
+   /**
+     * 秒杀优惠卷下单
+     *
+     * @param voucherId
+     * @return
+     */
+    @Override
+    //两表开启事务
+    @Transactional
+    public Result seckillVoucher(Long voucherId) {
+        SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = seckillVoucher.getBeginTime();
+        LocalDateTime endTime = seckillVoucher.getEndTime();
+        LocalDateTime now = LocalDateTime.now();
+        //下单时间，不在优惠卷使用时间
+        if (beginTime.isAfter(now)) {
+            return Result.fail("秒杀还未开始");
+        }
+        if (endTime.isBefore(now)) {
+            return Result.fail("秒杀已经结束");
+        }
+        //判断库存是否充足---》
+        int stock = seckillVoucher.getStock();
+
+        if (stock <= 0) {
+            return Result.fail("库存不足");
+        }
+        /**下单库存减一 解决超卖问题使用乐观锁,
+         * 但是以上这种方式通过测试发现会有很多失败的情况，
+         * 失败的原因在于：在使用乐观锁过程中假设100个线程同时都拿到了100的库存，
+         * 然后大家一起去进行扣减，但是100个人中只有1个人能扣减成功，
+         * 其他的人在处理时，他们在扣减时，库存已经被修改过了，
+         * 所以此时其他线程都会失败.
+         */
+//        boolean success = seckillVoucherService.update().
+//                setSql("stock = stock - 1")
+//                .eq("voucher_id", voucherId)
+//                .eq("stock",stock)
+//                .update();
+
+
+        //todo : 一人一单的判断
+
+        int count = seckillVoucherService.query()
+                .eq("user_id", UserHolder.getUser().getId())
+                .eq("voucher_id", voucherId)
+                .count();
+
+        if (count > 0 ){
+            return Result.fail("用户已经达到购买上限");
+        }
+
+
+        //更新数据库 下单
+
+        /**
+         * 乐观锁的改造
+         */
+        boolean success = seckillVoucherService.update().
+                setSql("stock = stock - 1")
+                .eq("voucher_id", voucherId)
+                .gt("stock", 0)
+                .update();
+        if (!success) {
+            return Result.fail("库存不足");
+        }
+        //创建订单
+        VoucherOrder voucherOrder = new VoucherOrder();
+        long nextId = redisIdWorker.nextId("order");
+
+        voucherOrder.setId(nextId);
+        voucherOrder.setUserId(UserHolder.getUser().getId());
+        voucherOrder.setVoucherId(voucherId);
+
+        voucherOrderService.save(voucherOrder);
+
+        return Result.ok(nextId);
+    }
+}
+
+```
+
+结果测试，发现还是下了多单
+
+分析： 有多个线程同时进入一人一单的判断，加入10个线程同时进入了一人一单的判断，这10个线程都是正数据库查的数据都是没有下过单，然后这10个线程就下单了，怎么解决呢？乐观锁？不可以，乐观锁的核心判断之前的数据是否有修改。这个只是查询、怎么办呢？使用锁
+
+
+
+```java
+/**
+     * 秒杀优惠卷下单
+     *
+     * @param voucherId
+     * @return
+     */
+    @Override
+    //两表开启事务
+    public Result seckillVoucher(Long voucherId) {
+        SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = seckillVoucher.getBeginTime();
+        LocalDateTime endTime = seckillVoucher.getEndTime();
+        LocalDateTime now = LocalDateTime.now();
+        //下单时间，不在优惠卷使用时间
+        if (beginTime.isAfter(now)) {
+            return Result.fail("秒杀还未开始");
+        }
+        if (endTime.isBefore(now)) {
+            return Result.fail("秒杀已经结束");
+        }
+        //判断库存是否充足---》
+        int stock = seckillVoucher.getStock();
+
+        if (stock <= 0) {
+            return Result.fail("库存不足");
+        }
+        /**下单库存减一 解决超卖问题使用乐观锁,
+         * 但是以上这种方式通过测试发现会有很多失败的情况，
+         * 失败的原因在于：在使用乐观锁过程中假设100个线程同时都拿到了100的库存，
+         * 然后大家一起去进行扣减，但是100个人中只有1个人能扣减成功，
+         * 其他的人在处理时，他们在扣减时，库存已经被修改过了，
+         * 所以此时其他线程都会失败.
+         */
+//        boolean success = seckillVoucherService.update().
+//                setSql("stock = stock - 1")
+//                .eq("voucher_id", voucherId)
+//                .eq("stock",stock)
+//                .update();
+
+        synchronized (UserHolder.getUser().getId().toString().intern()){
+            //解决事务不生效问题原因就是下面的方法是this.而不是sprig代理的方法
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        }
+
+    }
+
+
+
+    @Transactional
+    public  Result createVoucherOrder(Long voucherId) {
+//        synchronized (UserHolder.getUser().getId().toString().intern()) { 此处加锁，是先释放锁在提交事务，假如还未提交又有新的进程进来就有问题
+
+            //todo : 一人一单的判断
+            int count = seckillVoucherService.query()
+                    .eq("user_id", UserHolder.getUser().getId())
+                    .eq("voucher_id", voucherId)
+                    .count();
+
+            if (count > 0) {
+                return Result.fail("用户已经达到购买上限");
+            }
+
+
+            //更新数据库 下单
+
+            /**
+             * 乐观锁的改造
+             */
+            boolean success = seckillVoucherService.update().
+                    setSql("stock = stock - 1")
+                    .eq("voucher_id", voucherId)
+                    .gt("stock", 0)
+                    .update();
+            if (!success) {
+                return Result.fail("库存不足");
+            }
+            //创建订单
+            VoucherOrder voucherOrder = new VoucherOrder();
+            long nextId = redisIdWorker.nextId("order");
+
+            voucherOrder.setId(nextId);
+            voucherOrder.setUserId(UserHolder.getUser().getId());
+            voucherOrder.setVoucherId(voucherId);
+
+            voucherOrderService.save(voucherOrder);
+
+            return Result.ok(nextId);
+        }
+//    }
+}
+```
+
+使用AOP
+
+```xml
+   <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+        </dependency>
+```
+
+启动类
+
+```java
+@EnableAspectJAutoProxy(exposeProxy = true)
+```
+
+需要注意的点
+
+1. 事务注解不生效问题，@Transactional,是spring提功能的注解，但是我们在同个类方法调用的时候是this调用而不是代理spring代理调用，所以在使用该方法时要使用代理
+
+   ```java
+   //解决事务不生效问题原因就是下面的方法是this.而不是sprig代理的方法
+               IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+               return proxy.createVoucherOrder(voucherId);
+   ```
+
+2. synchronized 的范围，越小越好.
+
+   为什么不能所在方法里而是方法外，因为如果所在方法里，方法执行万，就解锁，然年提交事务，但是在提交事务的过程中，锁已经释放，其他线程查询数据库，就会得到老的数据。
+
+   所以逻辑应该时方法完成后，事务提交，释放锁
+
+3. 锁对象的选择
+
+   一人一单，应该以用户id的值为锁对象，是比较合理的。
+
+   需要注意的是
+
+   ` synchronized (UserHolder.getUser().getId().toString().intern())`
+
+   `   Long id = UserHolder.getUser().getId();`Long是包装类，即使用户id相同但是Long不同
+
+   所以用intern()
+
+   `intern()`是`String`类的一个方法，它的作用是检查字符串常量池中是否存在等于此`String`对象的字符串；如果存在，则返回代表池中这个字符串的`String`对象的引用；如果不存在，则将此`String`对象包含的字符串添加到池中，并返回此`String`对象的引用。简而言之，`intern()`方法用于确保所有相等的字符串字面量都引用同一个`String`对象。
+
+
+
+#### 分布式锁的使用
+
+11：50- 12:35
+
+使用 Redis 实现分布式锁
+
+* 获取锁
+
+  ```shell
+  set lock thread1 nx ex 30
+  ```
+
+* 释放锁
+
+  ```shell
+  del lock
+  ```
+
+需要注意的的是：
+
+1. 获取锁能不能不加过期时间或者单独设置过期时间
+
+   ​	不能，首先需要设置过期时间，防止业务服务执行过程中宕机，导致无法释放锁。
+
+   ​	其次也不能 setnx lock  set lock ttl  因为我们需要确保他们是原子性的操作，如果不是原子性操作，在获取锁后，还未设置过期时间，业务服务就宕机。也会导致无法释放锁。
+
+
+
+在utils 新增接口
+
+```java
+public interface ILock {
+
+
+    /**
+     * 尝试获取锁
+     * @param timeoutSec
+     * @return
+     */
+    boolean tryLock(long timeoutSec);
+
+    /**
+     * 释放锁
+     */
+    void unlock();
+}
+```
+
+在utils下实现
+
+```java
+public class SimplerRedisLock implements  ILock{
+
+    private StringRedisTemplate stringRedisTemplate;
+
+    //业务名称
+    private String name;
+    //redis 中key 的前缀
+    private  static  final String KEY_PREFIX ="lock:";
+
+    public SimplerRedisLock(StringRedisTemplate stringRedisTemplate, String name) {
+        this.stringRedisTemplate = stringRedisTemplate;
+        this.name = name;
+    }
+
+    /**
+     * 获取锁
+     * @param timeoutSec
+     * @return
+     */
+    @Override
+    public boolean tryLock(long timeoutSec) {
+
+        long ThreadId = Thread.currentThread().getId();
+        Boolean aBoolean = stringRedisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, ThreadId+"", timeoutSec, TimeUnit.SECONDS);
+
+        return Boolean.TRUE.equals(aBoolean);
+    }
+
+    /**
+     * 释放锁
+     */
+    @Override
+    public void unlock() {
+        stringRedisTemplate.delete(KEY_PREFIX+name);
+
+    }
+}
+
+```
+
+需要注意的是：
+
+` Boolean aBoolean = stringRedisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, ThreadId+"", timeoutSec, TimeUnit.SECONDS);`
+
+做了包装可能会null，所以返回结果拆箱；
+
+修改秒杀下单逻辑：
+
+核心就是修改锁
+
+```java
+    /**
+     * 秒杀优惠卷下单
+     *
+     * @param voucherId
+     * @return
+     */
+    @Override
+    //两表开启事务
+    public Result seckillVoucher(Long voucherId) {
+        SeckillVoucher seckillVoucher = seckillVoucherService.getById(voucherId);
+        LocalDateTime beginTime = seckillVoucher.getBeginTime();
+        LocalDateTime endTime = seckillVoucher.getEndTime();
+        LocalDateTime now = LocalDateTime.now();
+        //下单时间，不在优惠卷使用时间
+        if (beginTime.isAfter(now)) {
+            return Result.fail("秒杀还未开始");
+        }
+        if (endTime.isBefore(now)) {
+            return Result.fail("秒杀已经结束");
+        }
+        //判断库存是否充足---》
+        int stock = seckillVoucher.getStock();
+
+        if (stock <= 0) {
+            return Result.fail("库存不足");
+        }
+        /**下单库存减一 解决超卖问题使用乐观锁,
+         * 但是以上这种方式通过测试发现会有很多失败的情况，
+         * 失败的原因在于：在使用乐观锁过程中假设100个线程同时都拿到了100的库存，
+         * 然后大家一起去进行扣减，但是100个人中只有1个人能扣减成功，
+         * 其他的人在处理时，他们在扣减时，库存已经被修改过了，
+         * 所以此时其他线程都会失败.
+         */
+//        boolean success = seckillVoucherService.update().
+//                setSql("stock = stock - 1")
+//                .eq("voucher_id", voucherId)
+//                .eq("stock",stock)
+//                .update();
+
+
+        /**
+         * sync锁
+         *
+         */
+
+//        synchronized (UserHolder.getUser().getId().toString().intern()){
+//            //解决事务不生效问题原因就是下面的方法是this.而不是sprig代理的方法
+//            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+//            return proxy.createVoucherOrder(voucherId);
+//        }
+
+
+        //分布式锁 redis  锁定范围下单的用户id
+
+        //创建工具
+        SimplerRedisLock lock = new SimplerRedisLock(new StringRedisTemplate(), "order:"+UserHolder.getUser().getId());
+
+        //尝试获取锁
+        boolean isLock = lock.tryLock(5);
+
+        if (!isLock) {
+            //获取锁失败。返回错误信息
+            return Result.fail("只能下一单");
+
+        }
+        //获取锁成功
+
+        try {
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        } finally {
+            //释放锁
+            lock.unlock();
+        }
+
+    }
+```
+
+可能有分布式锁误删的问题，这种情况出现的原因和导致的影响如下
+
+![image-20250225123349303](images/readme.assets/image-20250225123349303.png)
+
+> 怎么处理在每个线程释放锁的时候，判断一下当前这把锁是否属于自己?
+
+我们在存锁的时候存value 是线程id，那么解锁的时候，只需要判断当前线程和redis中取出的value是否一直不就可以了。
+
+其实在单体项目是可以的，但是在集群模式下不可以，原因是线程的id是由jvm来自增管理的，每个集群都有自己的jvm。所以可能会出现，在不同服务下线程id可能相等的情况。这样也会导致删除。
+
+所以我们不能使用线程id来标识，我们使用UUID来生成 + id拼接\
+
+改造方法
+
+```java
+private  static  final String ID_PREFIX = UUID.fastUUID().toString(true);
+  
+/**
+     * 获取锁
+     * @param timeoutSec
+     * @return
+     */
+    @Override
+    public boolean tryLock(long timeoutSec) {
+
+        //获取线程标识
+        String ThreadValue = ID_PREFIX +Thread.currentThread().getId();
+        Boolean aBoolean = stringRedisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, ThreadValue, timeoutSec, TimeUnit.SECONDS);
+
+        return Boolean.TRUE.equals(aBoolean);
+    }
+
+    /**
+     * 释放锁
+     */
+    @Override
+    public void unlock() {
+
+        //判断一下是不是当钱线程的锁防止别的线程删除
+        //获取线程标识
+        String ThreadValue = ID_PREFIX +Thread.currentThread().getId();
+        //获取锁标识
+        String stringId = stringRedisTemplate.opsForValue().get(KEY_PREFIX + name);
+        if (ThreadValue.equals(stringId)) {
+            stringRedisTemplate.delete(KEY_PREFIX + name);
+        }
+    }
+}
+
+```
+
+
+
+休息 12：36
+
+
+
+### 面试
+
+只有hr面，没有技术面，java实习，我录音都没打开。
+
+13：30 - 15：30 - 18：00-20：00-22：00。
+
+只有HR面，做个自我介绍，简单了解一下情况，问了我我所介绍的知识都掌握了吗，我说可以问问。她说她不懂技术，然后就有意让我入职，公司是做医疗器械，以及his系统的。有人带，大概10+个开发人员，目前还在招人。大概5月份公司有大合同，开发会多。
+
+疑惑，公司地方挺大，但是都是空的位置，大概在公司一个小时，一共看到3个人，一个hr,一个前台，一个路人。
+
+实习 1天100。我感觉这个工作，最近不忙，主要还是以学习为主，开发任务不多。
+
+想问问这个工作靠不靠谱，签实习合同要注意什么，因为想边干边继续投递简历，随时做好跑路的准备（能不能随时跑路，有什么影响）。
+
+
+
+
+
+### 八股
+
+#### 计算机网络
+
+##### 1. Http和Https的区别
+
+Http:是互联网上应用最广泛的一种网络通信协议（约定）。基于TCP，可以使浏览器工作更高效，减少网络请求。
+
+Https: 是Http的加强版，可以认为是HTTP +SSL（Secure Socket Layer）,在Http的基础上增加了一些列的安全机制，一方面保证数据在网络传输过程中是安全的，另一方面对访问者增加了验证机制。是目前架构下最为安全的解决方案。
+
+主要区别：
+
+1. HTTP的连接时无状态的，HTTPS的数据传输时证书加密的，安全性更高。
+2. HTTP是免费的，而Https需要申请证书，而证书是收费的。
+3. 传输协议不同，所以使用的端口不懂，HTTP默认80，HTTPS默认443。
+
+HTTPS 的缺点：
+
+1. HTTPS的握手协议比较费时，会影响服务的相应速度以及吞吐量。
+2. HTTPS也并不是完全安全的。他的证书体系其实并不是完全安全的。并且HTTPS在面对DDOS几乎不起作用。
+3. 证书费钱，功能越强大证书费用更高。
+
+##### 2. Session和Cookie 有什么区别？
+
+当tomcat，第一次接收到客户端的请求，会开辟一个session空间，建立一个session对象，表明这一次会话，同时生成session id,通过响应头的方式保存在客户端浏览器的Cookie中，以后客户端的每次请求都会在请求头带上sessionid,可以根据session id 对应服务端保存的session对象里一些相关信息，比如说用户的登录信息。
+
+
+
+当应用，从单体到集群，分布式架构下，Cookie + session 的这种机制怎么扩展？
+
+1. session黏贴：在集群模式下，通过一个机制（nginx IP轮询）保证同一客户端的所有请求都会转发到tomcat实例中。问题：该实列挂了。
+2. session 复制：当一个tomcat上存了session信息，主动复制到集群中的其他实例。问题：复制需要时间，浪费空间
+3. session 共享：将服务端的session信息保存在第三方中，比如redis   
+
+
+
+
+
+### 总结
+
+SQl自连接，round(x,3)保留小数，以及发杂sql一步一步的连接拆分。
+
+一人一单怎么实现的，在下单的时候判断是否下过单（假如有10个线程并发去判断是否下过单，还是会一个下多单），就加锁，锁的粒度，不应该对这个方法所有的请求都加锁，而是仅仅对相同的用户执行去加锁，怎么实现？可以将锁对象视为userID，不过需要注意的是，sync锁是对象锁，也就是userid会被包装成Long对象，每次请求即使userid相同，但是Long 对象是不懂的，所以可以使用Long.toString().intern(),来保证userid项目就能锁到。
+
+分布式锁的使用场景:sync锁是jvm锁，由jvm锁监视器来判断是否可以获得锁，但是多态实例下，jvm不同，锁监视器不同，所以不能保证互斥。这就是分布式锁的使用场景，可以用Redis实现，用setnxex ,并确保这二者原子操作`set lock nx ex 1000`，删除锁通过del 操作。需要注意的是，分布式锁的误删问题。可以在添加锁的时候，将线程（uuid + 线程id）（因为不同集群线程id可能是相同的）加进去，在删除锁的时候在判断是不是该线程获取的锁。
+
+## Day 22
+
+> 今日计划
+
+计网知识，项目，八股，sql，coding，投递？
+
+### 计网
+
+#### 1. TCP的三次握手和四次挥手 
+
+TCP协议是在传输层的应用协议，是面向连接的可靠传输的协议。
+
+
+
++ 用户数据报协议 UDP（User Datagram Protocol）是无连接的，尽最大可能交付，没有拥塞控制，面向报文（对于应用程序传下来的报文不合并也不拆分，只是添加 UDP 首部），支持一对一、一对多、多对一和多对多的交互通信。
++ 传输控制协议 TCP（Transmission Control Protocol）是面向连接的，提供可靠交付，有流量控制，拥塞控制，提供全双工通信，面向字节流（把应用层传下来的报文看成字节流，把字节流组织成大小不等的数据块），每一条 TCP 连接只能是点对点的（一对一）。
+
+
+
+**TCP三次握手**
+
+![image-20250226093231357](images/readme.assets/image-20250226093231357.png)
+
+第一次握手：客户端向服务器发送连接请求，确保该**客户端发送消息是正常的**，**服务器接收消息是正常的**。
+
+第二次握手：服务器向客户端发送确认连接，保证了**服务器向客户端发送消息是正常的**，**客户端接收服务器的消息是正常的**。
+
+第三次握手：客户端向服务器发送确认连接，两者连接成功。
+
+
+
+tips: 两次握手已经解决了客户端和服务器之间相互收发消息是正常的，为什么还要进行三次握手。
+
++ 在网络中，数据包可能会延迟或重复到达。如果客户端发送的连接请求（SYN）在网络中滞留（但最终还是会到达服务器），客户端可能会重发SYN。如果没有三次握手，服务器可能会错误地建立多个连接。
++ 通过三次握手，客户端在收到服务器的SYN-ACK后，会发送一个确认（ACK），服务器只有在收到ACK后才会建立连接。这样可以避免旧的重复SYN包导致无效连接。
+
+
+
+
+
+**TCP四次挥手**
+
+![image-20250226094634857](images/readme.assets/image-20250226094634857.png)
+
+TCP使用四次挥手来终止连接，确保双方都能安全地关闭连接并释放资源。四次挥手的设计是为了处理**双向通信的关闭**问题，因为TCP连接是全双工的，双方都需要独立关闭自己的发送和接收通道。
+
+ **四次挥手的过程**
+
+1. **第一次挥手（FIN）**：
+   + 客户端决定关闭连接，发送一个FIN报文（FIN=1），并带上自己的序列号（seq=u）。
+   + 发送方进入**FIN_WAIT_1**状态，表示自己不再发送数据，但仍可以接收数据。
+2. **第二次挥手（ACK）**：
+   + 服务器收到FIN报文后，发送一个ACK报文（ACK=1），确认号为u+1（ack=u+1），并带上自己的序列号（seq=v）。
+   + 服务器进入**CLOSE_WAIT**状态，表示自己已经知道对方要关闭连接，关闭接收消息的通道，但仍可以发送数据。
+   + 客户端收到ACK后，进入**FIN_WAIT_2**状态，等待接收方的FIN报文。
+3. **第三次挥手（FIN）**：
+   + 接收方完成数据发送后，发送一个FIN报文（FIN=1），确认号仍为u+1（ack=u+1），并带上自己的序列号（seq=w）。
+   + 接收方进入**LAST_ACK**状态，等待发送方的最后一个ACK。
+4. **第四次挥手（ACK）**：
+   + 发送方收到FIN报文后，发送一个ACK报文（ACK=1），确认号为w+1（ack=w+1），并带上自己的序列号（seq=u+1）。
+   + 发送方进入**TIME_WAIT**状态，等待2MSL（最大报文段生存时间）后关闭连接。
+   + 接收方收到ACK后，立即关闭连接。
+
+
+
+### Coding
+
+#### Lombok失效
+
+第一次用idea初始化模板生成，但是使用过程中显示没有Setter方法，我明明引入了lombok，并且ide也有lombok插件，在ide中也启用了注解处理![image-20250226121619351](images/readme.assets/image-20250226121619351.png)
+
+还是不生效，找不到set方法，看Class文件，还是没有生成set方法，
+
+最后修改pom插件配置
+
+```xml
+ <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+```
+
+之前的是
+
+```xml
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.springframework.boot</groupId>
+                            <artifactId>spring-boot-configuration-processor</artifactId>
+                        </path>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+```
+
+
+
+第一次写测试覆盖率，多写测试用例，真能测出来漏洞百出的代码。还要努力啊。
+
+
+
+
+
+### Sql
+
+
+
+
+
+### 总结
+
+TCP 三次握手每次握手的目的，为什么还要第三次握手，四次挥手的过程。
+
+lombok失效排查，看class文件。
+
+断言测试。
+
+有offer,就没投递，不行，还是要投递。
+
+做事情尽量快速。
+
+
+
+
+
+## Day 23
+
+复习了项目的整体架构，前端太薄弱。
+
+### 评论模块的设计
+
+表的设计
+
+```sql
+create table comments
+(
+    commentId  bigint auto_increment comment 'id'
+        primary key,
+    userId     bigint                             not null comment '用户id',
+    questionId bigint                             not null comment '题目id',
+    content    text                               not null comment '评论内容',
+    createTime datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete   tinyint  default 0                 not null comment '是否删除'
+)
+    comment '评论' collate = utf8mb4_unicode_ci;
+```
+
+#### 功能梳理
+
+1. 添加评论
+
+2. 删除评论（用户自己的评论，或者管理员删除任意的评论）
+
+3. 修改评论 (修改自己的评论)
+
+4. 查询某一题目下自己的评论
+
+5. 分页查询某一题目下关联的评论并按照时间降序
+
+
+
+#### 1.添加评论
+
+接口
+
+```java
+    /**
+     * 新增评论
+     * @param commentsAddRequest
+     */
+    @PutMapping("/add")
+    public BaseResponse<Long> addComment(@RequestBody CommentsAddRequest commentsAddRequest){
+
+        return commentsService.addComments(commentsAddRequest);
+    }
+```
+
+请求体
+
+```java
+/**
+ * 创建评论请求
+ */
+@Data
+public class CommentsAddRequest implements Serializable {
+
+
+
+    /**
+     * 题目id
+     */
+    private Long questionId;
+
+    /**
+     * 评论内容
+     */
+    private String content;
+
+
+    private static final long serialVersionUID = 1L;
+}
+```
+
+tips: 用户id可以在httpServletRequest中获取。
+
+
+
+实现接口以及实现类
+
+```java
+   /**
+     * 用户添加评论
+     * @param comments
+     * @return
+     */
+    BaseResponse<Long> addComments(CommentsAddRequest comments);
+
+
+/**
+     * 发表评论
+     *
+     * @param commentsAddRequest
+     * @return
+     */
+    public BaseResponse<Long> addComments(CommentsAddRequest commentsAddRequest) {
+
+
+        ThrowUtils.throwIf(commentsAddRequest == null, ErrorCode.PARAMS_ERROR);
+        // 在此处将实体类和 DTO 进行转换
+        Comments comments = new Comments();
+        BeanUtils.copyProperties(commentsAddRequest, comments);
+
+        // 数据填充 userId ,
+
+        // todo 填充默认值
+        User loginUser = userService.getLoginUser(request);
+        comments.setUserId(loginUser.getId());
+        // 写入数据库
+        boolean result = this.save(comments);
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        // 返回新写入的数据 id
+        long newCommentId = comments.getCommentId();
+        return ResultUtils.success(newCommentId);
+    }
+```
+
+#### 2.删除评论
+
+用户只能删除自己的评论，若是管理员的话也可以删除任意评论
+
+接口
+
+```java
+  /**
+     * 删除评论
+     * @param commentsDeleteRequest
+     */
+    @DeleteMapping("/delete")
+    public BaseResponse<Long> deleteComment(@RequestBody CommentsDeleteRequest commentsDeleteRequest){
+        return commentsService.deleteComments(commentsDeleteRequest);
+    }
+```
+
+请求体
+
+```java
+/**
+ * 删除评论请求
+ */
+@Data
+public class CommentsDeleteRequest implements  Serializable{
+        
+        /**
+         * 评论id
+         */
+        private Long commentId;
+        
+
+        private static final long serialVersionUID = 1L;
+}
+```
+
+多余，删除操作的请求，核心参数都是其id,感觉之后再写删除就不要单独写了。
+
+
+
+实现接口以及实现类
+
+```java
+    /**
+     * 用户删除自己的评论
+     * 管理员删除任何评论
+     * @param commentsDeleteRequest
+     * @return
+     */
+    BaseResponse<Long> deleteComments(CommentsDeleteRequest commentsDeleteRequest);
+
+
+
+/**
+     * 用户删除自己的评论
+     * 管理员删除评论
+     *
+     * @param commentsDeleteRequest
+     * @return
+     */
+    @Override
+    public BaseResponse<Long> deleteComments(CommentsDeleteRequest commentsDeleteRequest) {
+        // 参数校验
+        ThrowUtils.throwIf(commentsDeleteRequest == null, ErrorCode.PARAMS_ERROR);
+        long commentId = commentsDeleteRequest.getCommentId();
+        ThrowUtils.throwIf(commentId <= 0, ErrorCode.PARAMS_ERROR);
+
+        // 该comment 是否存在
+        Comments oldComments = this.getById(commentId);
+        ThrowUtils.throwIf(oldComments == null, ErrorCode.NOT_FOUND_ERROR);
+
+        // 判断是否是该用户的评论
+        User loginUser = userService.getLoginUser(request);
+        Long userId = loginUser.getId();
+
+        // 不是自己并且不是管理员身份，不能删除
+        ThrowUtils.throwIf(!oldComments.getUserId().equals(userId) && !UserRoleEnum.ADMIN.getValue().equals(loginUser.getUserRole()), ErrorCode.NO_AUTH_ERROR);
+
+        // 删除评论
+        boolean result = this.removeById(commentId);
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        return ResultUtils.success(commentId);
+    }
+```
+
+
+
+#### 3.修改评论
+
+只能修改自己的评论
+
+
+
+接口
+
+```java
+   /**
+     * 更新自己的评论
+     * @param commentsUpdateRequest
+     * @return
+     */
+    @PutMapping("/update")
+    public BaseResponse<Long> updateComment(@RequestBody CommentsUpdateRequest commentsUpdateRequest){
+
+
+        return commentsService.updateComments(commentsUpdateRequest);
+    }
+```
+
+请求体
+
+```java
+/**
+ * 更新评论请求
+ */
+@Data
+public class CommentsUpdateRequest implements Serializable {
+
+    /**
+     * 评论id
+     */
+    private Long commentId;
+
+
+    /**
+     * 评论内容
+     */
+    private String content;
+
+
+
+    private static final long serialVersionUID = 1L;
+}
+
+```
+
+
+
+接口以及实现类
+
+```java
+ /**
+     * 用户更新自己的评论
+     * @param commentsUpdateRequest
+     * @return
+     */
+    BaseResponse<Long> updateComments(CommentsUpdateRequest commentsUpdateRequest);
+
+
+
+
+/**
+     * 更新自己的评论
+     * @param commentsUpdateRequest
+     * @return
+     */
+    @Override
+    public BaseResponse<Long> updateComments(CommentsUpdateRequest commentsUpdateRequest) {
+        // 参数校验
+        ThrowUtils.throwIf(commentsUpdateRequest == null, ErrorCode.PARAMS_ERROR);
+
+        long commentId = commentsUpdateRequest.getCommentId();
+        ThrowUtils.throwIf(commentId <= 0, ErrorCode.PARAMS_ERROR);
+
+        // 该comment 是否存在
+        Comments oldComments = this.getById(commentId);
+        ThrowUtils.throwIf(oldComments == null, ErrorCode.NOT_FOUND_ERROR);
+
+        // 判断是否是该用户的评论
+        User loginUser = userService.getLoginUser(request);
+        Long userId = loginUser.getId();
+        ThrowUtils.throwIf(!oldComments.getUserId().equals(userId), ErrorCode.NO_AUTH_ERROR);
+
+        // 更新评论 老的评论属性复制
+        Comments comments = new Comments();
+        BeanUtil.copyProperties(oldComments, comments);
+        // 补充字段 --> 评论内容
+        comments.setContent(commentsUpdateRequest.getContent());
+
+        //更新评论
+        boolean result = updateById(comments);
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+
+        return ResultUtils.success(commentId);
+
+    }
+```
+
+
+
+#### 4.查询某一题目下自己的评论
+
+接口
+
+```java
+/**
+     * 用户查看自己的某一题目下自己的评论
+     * @param questionId
+     * @return
+     */
+    @GetMapping("/{questionId}")
+    public BaseResponse<List<Comments>> getCommentsByIdAndQuestionId(@PathVariable long questionId){
+
+        return commentsService.getCommentsById(questionId);
+    }
+
+```
+
+
+
+请求体 : 直接id 查了。
+
+
+
+接口实现，实现类
+
+```java
+  /**
+     * 用户查看自己的某一题目下的评论
+     * @param questionId
+     * @return
+     */
+    BaseResponse<List<Comments>> getCommentsById(long questionId);
+
+
+
+/**
+     * 用户查看某一题目下自己的评论
+     * @param questionId
+     * @return
+     */
+    @Override
+    public BaseResponse<List<Comments>> getCommentsById(long questionId) {
+        // 参数校验
+        ThrowUtils.throwIf(questionId <= 0, ErrorCode.PARAMS_ERROR);
+
+        //获取登录用户
+        User loginUser = userService.getLoginUser(request);
+
+        //校验用户
+        ThrowUtils.throwIf(loginUser == null, ErrorCode.NOT_LOGIN_ERROR);
+
+        Long userId = loginUser.getId();
+        // 查询评论列表
+        LambdaQueryWrapper<Comments> lambdaQueryWrapper = new LambdaQueryWrapper<>();
+        lambdaQueryWrapper.eq(Comments::getQuestionId, questionId)
+                .eq(Comments::getUserId, userId);
+        List<Comments> list = this.list(lambdaQueryWrapper);
+        return ResultUtils.success(list);
+    }
+```
+
+#### 5.分页查询某一题目下关联的评论并按照时间降序.
+
+接口
+
+```java
+ /**
+     * 查询题目关联的评论列表（分页）
+     * @param commentsQueryPageRequest
+     * @return
+     */
+    @PutMapping("/list/page")
+    public BaseResponse<Page<Comments>> listCommentByPage(@RequestBody CommentsQueryPageRequest commentsQueryPageRequest){
+
+        return commentsService.queryCommentsByPage(commentsQueryPageRequest);
+    }
+
+```
+
+请求体
+
+```java
+/**
+ * 查询题库下的评论列表请求
+ */
+
+@Data
+public class CommentsQueryPageRequest  implements Serializable {
+
+
+    /**
+     * 题库id
+     */
+    private Long questionId;
+
+
+    /**
+     * 当前页号
+     */
+    private int current = 1;
+
+    /**
+     * 页面大小
+     */
+    private int pageSize = 10;
+
+
+    private static final long serialVersionUID = 1L;
+}
+```
+
+实现类
+
+```java
+/**
+     * 分页获取题库下相关联的评论并按照时间降序
+     * @param commentsQueryPageRequest
+     * @return
+     */
+    //分页获取
+    BaseResponse<Page<Comments>> queryCommentsByPage(CommentsQueryPageRequest commentsQueryPageRequest);
+
+
+ /**
+     * 分页获取题库相关联的评论
+     * @param commentsQueryPageRequest
+     * @return
+     */
+    @Override
+    public BaseResponse<Page<Comments>> queryCommentsByPage(CommentsQueryPageRequest commentsQueryPageRequest ) {
+
+        // 参数校验
+        ThrowUtils.throwIf(commentsQueryPageRequest == null, ErrorCode.PARAMS_ERROR);
+
+        //获得参数
+        Long questionId = commentsQueryPageRequest.getQuestionId();
+        int current = commentsQueryPageRequest.getCurrent();
+        int pageSize = commentsQueryPageRequest.getPageSize();
+
+
+
+        //校验 题目id 是否存在
+        ThrowUtils.throwIf(questionId <= 0, ErrorCode.PARAMS_ERROR);
+
+
+        // 构造查询条件
+        LambdaQueryWrapper<Comments> lambdaQueryWrapper = new LambdaQueryWrapper<>();
+        lambdaQueryWrapper.eq(Comments::getQuestionId, questionId);
+
+        // 构造分页
+        Page<Comments> page = Page.of(current, pageSize);
+
+        //分页排序
+        page.addOrder(OrderItem.desc("updateTime"));
+
+
+        // 分页查询
+        page = this.page(page, lambdaQueryWrapper);
+        // 获取分页结果
+        List<Comments> records1 = page.getRecords();
+        return ResultUtils.success(page);
+    }
+
+```
+
+tips： 使用了Mybatis-Plus的分页插件
+
+```java
+**
+ * MyBatis Plus 配置
+ *
+ */
+@Configuration
+@MapperScan("com.ls.mianshidog.mapper")
+public class MyBatisPlusConfig {
+
+    /**
+     * 拦截器配置
+     *
+     * @return
+     */
+    @Bean
+    public MybatisPlusInterceptor mybatisPlusInterceptor() {
+        MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
+        // 分页插件
+        interceptor.addInnerInterceptor(new PaginationInnerInterceptor(DbType.MYSQL));
+        return interceptor;
+    }
+}
+```
+
+
+
+### Sql
+
+[1251. 平均售价 - 力扣（LeetCode）](https://leetcode.cn/problems/average-selling-price/description/?envType=study-plan-v2&envId=sql-free-50)
+
+```sql
+select P.product_id,ifnull(round(sum(price * units) / sum(units),2),0) as average_price
+     from Prices P
+     	left join UnitsSold U
+        	on P.product_id = U.product_id
+       			 where purchase_date between start_date and end_date or purchase_date IS Null
+          			  group by P.product_id;
+```
+
+
+
+```sql
+select p.product_id, ifnull(round((sum(price * units) / sum(units)), 2), 0) average_price 
+	from prices p 
+		left join unitssold u 
+			on p.product_id = u.product_id and purchase_date between start_date and end_date 
+group by product_id;
+```
+
+上述两者代码都可以通过。
+
+本来确实没什么难的，用round(x,2)保留小数
+
+ifnull(X1，X2) 的意思是：if(x1 == null) 值为x2,if(x1 != null)  值为 x1。
+
+要考虑 purchase_date 为null 的情况，在过滤条件添加 or purchase_date IS Null,保证能查到所有的id。
+
+过滤条件放在on 后和 where后的区别。
+
+[SQL语句连接筛选条件放在on和where后的区别（一篇足矣）_sql on后面跟两个等于条件-CSDN博客](https://blog.csdn.net/qq_42434318/article/details/112819267)
+
+总的来说，on就是连接，遵循连接的特性，如左连接，就保留左表的所有字段，即使为null。where 就是正常的过滤。
+
+
+
+
+
+[1633. 各赛事的用户注册率 - 力扣（LeetCode）](https://leetcode.cn/problems/percentage-of-users-attended-a-contest/submissions/604075464/?envType=study-plan-v2&envId=sql-free-50)
+
+```sql
+select contest_id,round(count(*) * 100 / (
+    select count(*) from Users),2) as percentage
+    from Users U
+     join Register R
+            on U.user_id = R.user_id
+                group by contest_id
+                    order by percentage desc,contest_id asc
+```
+
+子查询 + 多字段排序。
+
+
+
+
+
+### 每日一题
+
+#### 1. InnoDB和MyISAM的区别
+
+主要的区别： 
+
+1. **数据的存储结构不一样**
+
++ **InnoDB**：
+  + 数据和索引存储在同一个文件中（`.ibd` 文件）。支持聚簇索引（Clustered Index），索引和值放在一起（二级索引是聚簇索引吗）。
++ **MyISAM**：
+  + 数据（`.MYD` 文件）和索引（`.MYI` 文件）分开存储。不支持聚簇索引。
+
+
+
+tips：数据的存储结构不一样，导致查询效率也不一样，**首先**，innoDB数据和索引在一个文件中，文件更大查询的较慢，MyISAM只存储索引，所以相同索引下，MyISAM使用的存储空间更少（页更少）,查的页数就少，所以MyISAM查的比InnoDB快；**其次** 聚簇索引的存储方式，可能会发生回表（使用二级索引），而MyISAM不会发生回表，因为他的索引（叶子节点存储的是指向这个数据的物理地址，所以可以一下获得全部的信息，而不用回表）
+
+**2. 锁的级别不一样**
+
+* InnoDB
+
+  * 支持行锁，锁的粒度较低，所以并发能力高，同时行锁的性能开销更大。
+
+* MyISAM
+
+  * 支持表锁，锁的粒度较高，所以锁发能力低。
+
+  
+
+tips：对一行数据修改，InnoDB会使用行锁，MyISAM会使用表锁，表锁的管理简单，只需要维护一个锁对象（整个表）行锁的管理复杂，需要为每一行维护锁信息。
+
+**3. 事务支持**
+
+* InnoDB支持事务
+  * redo log (持久性)， MVCC 和 锁（隔离性）， undo log(原子性）， 以上三种特性加上外键构成一致性。
+* MyISAM 不支持事务
+  * 不支持事务，反而没有那么多性能消耗，所以时候读多写少的情况。
+
+总结: 
+
+​	以上特性总结，InnoDB 支持行锁，事务，（外键），索引和数据存放在一起（.idb文件）（可能会回表），能够承受更多的并发，并且发生错误有回顾机制，更加安全。
+
+​	MyISAM,支持表锁，不支持事务，索引和数据单独存放（.myd和.myi）,查询效率更高，但是不够安全。
+
+#### 2. Spring的定时任务同时执行时穿行还是并行
+
+
+
+在 **Spring** 中，定时任务的执行方式（串行或并行）取决于 **任务调度器（TaskScheduler）** 的配置以及任务本身的实现方式。
+
+------
+
+  1. **默认行为：串行执行**
+
++ **单线程任务调度器**：
+
+  + 如果使用 Spring 默认的任务调度器（如 `ThreadPoolTaskScheduler` 未配置线程池），定时任务会在 **单线程** 中执行。
+  + 这意味着多个定时任务会 **串行执行**，即使它们的触发时间重叠，也会依次排队执行。
+
++ **示例**：
+
+  ```java
+  @Scheduled(fixedRate = 1000)
+  public void task1() {
+      System.out.println("Task 1 - " + Thread.currentThread().getName());
+  }
+  
+  @Scheduled(fixedRate = 1000)
+  public void task2() {
+      System.out.println("Task 2 - " + Thread.currentThread().getName());
+  }
+  ```
+
+  + 如果未配置线程池，`task1` 和 `task2` 会在同一个线程中串行执行。
+
+------
+
+  2. **配置并行执行**
+
++ **多线程任务调度器**：
+
+  + 通过配置 `ThreadPoolTaskScheduler` 或 `TaskExecutor`，可以为定时任务提供线程池支持，从而实现 **并行执行**。
+  + 每个定时任务会在独立的线程中运行，互不干扰。
+
++ **配置示例**：
+
+  ```java
+  @Configuration
+  @EnableScheduling
+  public class SchedulerConfig implements SchedulingConfigurer {
+  
+      @Override
+      public void configureTasks(ScheduledTaskRegistrar taskRegistrar) {
+          ThreadPoolTaskScheduler taskScheduler = new ThreadPoolTaskScheduler();
+          taskScheduler.setPoolSize(5); // 设置线程池大小
+          taskScheduler.setThreadNamePrefix("ScheduledTask-");
+          taskScheduler.initialize();
+          taskRegistrar.setTaskScheduler(taskScheduler);
+      }
+  }
+  ```
+
+  + 配置后，`task1` 和 `task2` 会在不同的线程中并行执行。
+
+------
+
+  3. **异步任务支持**
+
++ **使用 `@Async`**：
+
+  + 如果定时任务方法标记了 `@Async`，Spring 会使用异步任务执行器来运行任务，从而实现并行执行。
+  + 需要确保在配置类中启用异步支持（`@EnableAsync`）。
+
++ **示例**：
+
+  
+
+  ```java
+  @Configuration
+  @EnableAsync
+  @EnableScheduling
+  public class AsyncConfig {
+  }
+  
+  @Component
+  public class ScheduledTasks {
+  
+      @Async
+      @Scheduled(fixedRate = 1000)
+      public void task1() {
+          System.out.println("Task 1 - " + Thread.currentThread().getName());
+      }
+  
+      @Async
+      @Scheduled(fixedRate = 1000)
+      public void task2() {
+          System.out.println("Task 2 - " + Thread.currentThread().getName());
+      }
+  }
+  ```
+
+  + `task1` 和 `task2` 会在不同的线程中并行执行。
+
+------
+
+  4. **任务阻塞问题**
+
++ **单线程调度器的风险**：
+  + 如果定时任务是阻塞的（如执行时间较长），且使用单线程调度器，会导致后续任务延迟执行。
++ **解决方案**：
+  + 使用多线程调度器或异步任务支持，避免任务阻塞。
+
+------
+
+  5. **总结**
+
+| 执行方式     | 配置方式                       | 特点                             |
+| :----------- | :----------------------------- | :------------------------------- |
+| **串行执行** | 默认行为，无需额外配置         | 任务依次执行，适合简单、短时任务 |
+| **并行执行** | 配置 `ThreadPoolTaskScheduler` | 任务并行执行，适合复杂、长时任务 |
+| **异步执行** | 使用 `@Async` + `@EnableAsync` | 任务异步执行，适合高并发场景     |
+
+------
+
+6. **最佳实践**
+
++ 如果定时任务执行时间较短且不频繁，可以使用默认的串行执行。
++ 如果任务执行时间较长或需要高并发，建议配置多线程调度器或使用异步任务支持。
++ 避免在单线程调度器中执行阻塞任务，以免影响其他任务的执行。
+
+
+
+
+
+### 总结
+
+​	实习第一天，公司常驻一个开发（明天出差），两个实习（一个我）开发，近一个月没需求，让自己在自己的项目上加功能。后端增删改查可以，前端不会，还要快速学前端。
+
+​	带薪学习好还是不好，没人教，和自己学一样，只是有个人push着学。想着在这个公司边实习边面试呢？在公司也没投简历（虽然也没人管）。回家后用软件自动投递了会发现上海又有新的活跃招聘了，还不少，奇迹的22：00说明天线上面试，答应了，还不知道明天怎么面试。或许就拿着手机去楼下聊聊。
+
+​	最好找工作的两月，最好找工作的俩月，八股看的少了，坚持投递，我只是小小的实习生，大不了不干也不能耽误面试。
+
+## Day 24
+
+### 前端学习React
+
+[快速入门 – React 中文文档](https://zh-hans.react.dev/learn)
+
+核心：React 以组件的形式组织，并且不允许返回多个标签，意思是我们只能返回一个<div></div> 父标签的文件
+
+```app.js
+function Component() {
+  return (
+    <div>
+        <h1>关于</h1>
+      <p>你好。<br />最近怎么样？</p>
+    </div>
+  );
+}
+
+
+export default function MyApp() {
+  return (
+    <div>
+      <h1>欢迎使用React</h1>
+      <Component />
+    </div>
+  );
+}
+
+```
+
+![image-20250228093403318](images/readme.assets/image-20250228093403318.png)
+
+
+
+取值，在{}取值
+
+```jsx
+const user = {
+  name : 'hsnqls',
+  imgUrl:"https://img.shetu66.com/2023/04/25/1682405982916194.png",
+  imgSize: 50,
+}
+
+export default function Profile() {
+  return (
+    <>
+      <h1>{user.name}</h1>
+      <img
+        className="avatar"
+        src={user.imgUrl}
+        alt={'Photo of ' + user.name}
+        style={{
+          width: user.imgSize,
+          height: user.imgSize
+        }}
+      />
+    </>
+  );
+}
+
+```
+
+tips: style={{}}，外层括号表示嵌入一个嵌入 JavaScript 表达式。 内层 `{}`：用于定义 JavaScript 对象,双花括号 `{{ }}` 是 JSX 中定义内联样式的标准写法
+
+
+
+
+
+列表渲染
+
+```jsx
+const todoArray = [
+  { title: 'java', isDo: true, id: 1 },
+  { title: 'vue', isDo: false, id: 2 },
+  { title: 'react', isDo: false, id: 3 }
+];
+
+export default function TodoList() {
+  const todolist = todoArray.map(todo => {
+    return (
+      <li
+        key={todo.id}
+        style={{
+          color: todo.isDo ? 'green' : 'red' // 根据 todo.isDo 的值设置颜色
+        }}
+      >
+        {todo.title}
+      </li>
+    );
+  });
+
+  return <ul>{todolist}</ul>;
+}
+```
+
+![image-20250228101801364](images/readme.assets/image-20250228101801364.png)
+
+
+
+组件绑定响应事件
+
+```jsx
+import { useState } from 'react';
+
+function MyClick1(){
+  const [mycount,setMyCount] = useState(0);
+
+  function handermyClick1(){
+    setMyCount(mycount+1)
+  }
+
+  return (
+    <button onClick={handermyClick1}
+      style={{
+         borderRadius: '10px'
+      }}
+      >
+      点了 {mycount} 次
+    </button>
+  )
+}
+
+
+export default function MyApp() {
+  return (
+    <div>
+      <h1>独立更新的计数器</h1>
+      <MyClick1 />
+      <MyClick1 />
+    </div>
+  );
+}
+```
+
+![image-20250228103743794](images/readme.assets/image-20250228103743794.png)
+
+.
+
+### 新增前端评论模块
+
+不会前端，我是怎么搞出来的，评论模块的。算是对我之前没有实现思路的总结。
+
+![image-20250228160603956](images/readme.assets/image-20250228160603956.png)
+
+首先，我了解，React是一组件的形式，来组织页面的。
+
+我要想新添加一个页面，也就是编写一个组件，之后在所需要展示的地方引入组件就行。
+
+**如何编写一个组件**
+
+会React就能编写（.....），不会就用AI编写，如何用AI编写组件。
+
+首先我们要想清楚我们想要编写组件的数据是什么样子的？
+
+我是一个后端开发，我已经编写好了，后端的接口，比如说获得题库下相关的评论集合。
+
+![image-20250228161246447](images/readme.assets/image-20250228161246447.png)
+
+也就是
+
+```json
+const comments = [
+  {
+    commentId: '1',
+    userId: '5',
+    questionId: '1',
+    content: '不够清晰',
+    createTime: '2025-02-27T05:02:48.000+00:00',
+    updateTime: '2025-02-27T05:02:48.000+00:00',
+    isDelete: 0,
+  },
+  {
+    commentId: '3',
+    userId: '5',
+    questionId: '1',
+    content: '需要更多示例',
+    createTime: '2025-02-27T05:42:02.000+00:00',
+    updateTime: '2025-02-27T05:42:02.000+00:00',
+    isDelete: 0,
+  },
+  {
+    commentId: '4',
+    userId: '6',
+    questionId: '1',
+    content: '已删除的评论',
+    createTime: '2025-02-27T06:00:00.000+00:00',
+    updateTime: '2025-02-27T06:00:00.000+00:00',
+    isDelete: 1, // 已删除的评论
+  },
+];
+```
+
+
+
+交给AI 用React写一个XXX组件，展示的数据格式是如下。DeepSeek最好用。
+
+```tsx
+'use client';
+import React from 'react';
+import { List, Avatar, Typography, Card } from 'antd';
+import dayjs from 'dayjs';
+
+interface Comment {
+  commentId: string;
+  userId: string;
+  questionId: string;
+  content: string;
+  createTime: string;
+  updateTime: string;
+  isDelete: number;
+}
+
+interface Props {
+  comments: Comment[]; // 评论数据
+}
+
+const CommentList: React.FC<Props> = ({ comments }) => {
+  // 过滤掉已删除的评论
+  const validComments = comments.filter((comment) => comment.isDelete === 0);
+
+  return (
+    <Card
+      title="评论" // 添加标题
+      style={{
+        border: '1px solid #e8e8e8', // 边框颜色
+        borderRadius: '8px', // 圆角
+        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)', // 阴影
+        
+      }}
+    >
+      <List
+        dataSource={validComments}
+        renderItem={(comment) => (
+          <List.Item>
+            <List.Item.Meta
+              avatar={<Avatar src={"https://vcg01.cfp.cn/creative/vcg/800/new/VCG211302657498.jpg"} />} // 用户头像
+              title={
+                <div>
+                  <Typography.Text strong>用户 {comment.userId}</Typography.Text>
+                  <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                    {dayjs(comment.createTime).format('YYYY-MM-DD HH:mm')}
+                  </Typography.Text>
+                </div>
+              }
+              description={comment.content} // 评论内容
+            />
+          </List.Item>
+        )}
+      />
+    </Card>
+  );
+};
+
+export default CommentList;
+```
+
+
+
+组件编写好，的第一件是就是，引入，看看组件到底能不能用。随便找一个页面，引入该组件，数据部分，就先用假数据，先不请求后端。看看能不能用。报错信息给AI. 直到组件可以使用。
+
+
+
+下一步，在需要该组件的地方，引入该组件，可以使用<div style={{}}> <组件></div>>，对组件的布局进行调整。
+
+现在还是假数据，我们需要从后端请求数据。真得学学Axios，Axios才是主要的前后端交互（页面算什么......）。
+
+**不会，就尽快学。**
+
+我确实不会，但是时间紧迫确实要开发，找一个项目种，最简单的一个GET请求的Axios,问AI是什么意思。了解了就仿照着写。
+
+这里，重要的就是参数定义， 响应的数据接口，请求的地址，请求的方法。
+
+如下例子
+
+```ts
+import request from '@/libs/request';
+
+export async function getCommentsByQuestionIdUsingGet(
+  questionId: number,
+  options?: { [key: string]: any },
+) {
+  return request<API.CommentVO[]>(`/api/comments/list/${questionId}`, {
+    method: 'GET',
+    ...(options || {}),
+  });
+}
+```
+
+写完Axios请求， 就在我们使用组件的地方，用该方法获取数据。
+
+怎么用这个Axios请求，看原来的方法怎么，获取的，大概模仿一下。
+
+```ts
+"use server";
+import { message } from "antd";
+import { getQuestionVoByIdUsingGet } from "@/api/questionController";
+import QuestionCard from "@/components/QuestionCard";
+import "./index.css";
+import Comments from "@/components/Comments/Comments";
+import { getCommentsByQuestionIdUsingGet } from "@/api/commentController";
+
+/**
+ * 题目详情页
+ * @constructor
+ */
+export default async function QuestionPage({ params }) {
+  const { questionId } = params;
+
+  // 获取题目详情
+  let question = undefined;
+  try {
+    const res = await getQuestionVoByIdUsingGet({
+      id: questionId,
+    });
+    question = res.data;
+  } catch (e) {
+    message.error("获取题目详情失败，" + e.message);
+  }
+  // 错误处理
+  if (!question) {
+    return <div>获取题目详情失败，请刷新重试</div>;
+  }
+  
+  // todo 获取评论详情
+  let comments = undefined;
+  try {
+    const res = await getCommentsByQuestionIdUsingGet(questionId);
+    comments = res.data;
+  } catch (e) {
+    message.error("获取评论详情失败，" + e.message);
+  }
+  // 错误处理
+  if (!comments) {
+    return <div>获取评论详情失败，请刷新重试</div>;
+  }
+
+  return (
+    <>
+    <div id="questionPage">
+      <QuestionCard question={question} />
+    </div>
+
+    <div  
+    style={{
+      marginTop: '40px',
+      padding: '10px',
+     
+      borderRadius: '8px',
+      backgroundColor: '#f9f9f9',
+    }
+    }>
+    <Comments comments={comments} />
+    </div>
+
+    </>
+    
+  );
+}
+
+```
+
+
+
+这里出错了问AI,最好打开DeepSeek或者Kimi的深度思考，看他的思考过程，是如何排查错误的，我们也可以学到。
+
+至此就可以开发一个新组件了。
+
+总结一下：开发新页面的流程，第一步学一点点框架，直到项目用什么框架，框架的文件是怎么组织的。第二部，模块化的做最简单的页面（后续在更新，添加功能），最简单的基本上就是展示了。就先做展示。
+
+做该模块的展示功能， 编写组件，引入组件，用假数据测试组件，<div style={{}}> <组件></div>>调整组件的格式。编写Axios请求。
+
+
+
+#### 分页获取评论模块
+
+上述已经完成了最简单的，评论模块，但是评论太多，我们应该分页查询。
+
+那就分页请求数据，
+
+
+
+
+
+![image-20250228222338276](images/readme.assets/image-20250228222338276.png)
+
+还是找不出错误，不知道那里错了。.......................................
+
+不知道那里错了，但是弄好了，原因是
+
+```java
+// 过滤掉已删除的评论
+  const validComments = comments.filter((comment) => comment.isDelete === 0);
+```
+
+一开始说filter 不是函数，我就给删了，..........，不太明白。
+
+我真服了
+
+![image-20250228223354324](images/readme.assets/image-20250228223354324.png)
+
+comment 可能不是数组。 服了。
+
+
+
+
+
+### 总结
+
+​	React大概了解，也能简单的新增页面了，不过还是很吃力。还要多做才能熟练。
+
+​	看了Java集合的八股。
+
+​	改了昨天的小bug。
+
+​	没写sql。
+
+周六日学点什么呢？把AI那块实现一下（后端），最好也一起跟着写前端。用户中心项目前端实现。
+
+早点睡觉
+
+
+
+## Day 25
+
+打算接入AI.
+
+### AI生成答案
+
+#### 需求分析
+
+* AI 解答题目 【P0】
+* AI 生成题目  [P0]
+* AI 模拟面试
+* AI 解析答案（评价）
+
+#### 调研
+
+DeepSeek ,GPT, Kimi
+
+
+
+#### 方案设计
+
+技术选型： AI 的选型？DeepSeek
+
+**DeepSeek 怎么接入到程序中呢？**推荐用火山引擎：快速、稳定、有赠送额度、有 SDK
+
+##### 1、接入 AI
+
+使用 SDK，封装自己的 AI 工具类（AiManager 便于项目统一调用）
+
+##### 2、AI 生成题目【仅管理员可用】
+
+
+
+##### 3、AI 生成题解【仅管理员可用】
+
+
+
+##### 4、一些优化
+
+#### 方案实现
+
+
+
+##### 1.项目接入AI
+
+用最简单的方式使用AI。也就是聊天框.
+
+给AI 的提示词，输出格式要规定，才会返回我们符合要求的结果。
+
+```text
+生成 20 道 MySQL 的20道题目，输出格式如下
+1. Mysql sql 语句执行的顺序是什么？
+2. Mysql 的 MVCC你了解吗？
+3. Mysql 的 存储引擎有哪些？
+4. Mysql 的 锁机制了解吗？
+5. Mysql 的 主从同步是怎么实现的？
+```
+
+![image-20250301104453795](images/readme.assets/image-20250301104453795.png)
+
+
+
+聊天框，其实也就是在页面调用了大模型的接口。
+
+我们怎么在Java 程序种调用接口呢? 看官方文档。
+
+在我们的程序种，先运行起来，AI模型。
+
+[火山方舟大模型体验中心-火山引擎](https://www.volcengine.com/experience/ark)
+
+```xml
+<!--        AI 接入 火山引擎 Deepseek https://www.volcengine.com/experience/ark-->
+        <dependency>
+            <groupId>com.volcengine</groupId>
+            <artifactId>volcengine-java-sdk-ark-runtime</artifactId>
+            <version>0.1.153</version>
+        </dependency>
+
+```
+
+版本： https://central.sonatype.com/artifact/com.volcengine/volcengine-java-sdk-ark-runtime
+
+使用以下，代码用自己的APIKEY
+
+```java
+import com.volcengine.ark.runtime.model.completion.chat.ChatCompletionRequest;
+import com.volcengine.ark.runtime.model.completion.chat.ChatMessage;
+import com.volcengine.ark.runtime.model.completion.chat.ChatMessageRole;
+import com.volcengine.ark.runtime.service.ArkService;
+import okhttp3.ConnectionPool;
+import okhttp3.Dispatcher;
+import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+
+@Component
+public class AI {
+
+//    static String apiKey = System.getenv("ARK_API_KEY");
+    static String apiKey = AIConfig.API_KEY;
+
+    static ConnectionPool connectionPool = new ConnectionPool(5, 1, TimeUnit.SECONDS);
+    static Dispatcher dispatcher = new Dispatcher();
+    static ArkService service = ArkService.builder()
+            .dispatcher(dispatcher)
+            .connectionPool(connectionPool)
+            .baseUrl("https://ark.cn-beijing.volces.com/api/v3")
+            .apiKey(apiKey).build();
+
+    public static void main(String[] args) {
+        System.out.println("\n----- standard request -----");
+        final List<ChatMessage> messages = new ArrayList<>();
+        final ChatMessage systemMessage = ChatMessage.builder().role(ChatMessageRole.SYSTEM).content("你是程序员助手").build();
+        final ChatMessage userMessage = ChatMessage.builder().role(ChatMessageRole.USER).content("生成 10 道 Java 题目").build();
+        messages.add(systemMessage);
+        messages.add(userMessage);
+
+        ChatCompletionRequest chatCompletionRequest = ChatCompletionRequest.builder()
+                .model("deepseek-v3-241226")
+                .messages(messages)
+                .build();
+
+        service.createChatCompletion(chatCompletionRequest)
+                .getChoices()
+                .forEach(choice -> System.out.println(choice.getMessage().getContent()));
+
+
+        // 流式请求
+//        System.out.println("\n----- streaming request -----");
+//        final List<ChatMessage> streamMessages = new ArrayList<>();
+//        final ChatMessage streamSystemMessage = ChatMessage.builder().role(ChatMessageRole.SYSTEM).content("你是人工智能助手").build();
+//        final ChatMessage streamUserMessage = ChatMessage.builder().role(ChatMessageRole.USER).content("常见的十字花科植物有哪些？").build();
+//        streamMessages.add(streamSystemMessage);
+//        streamMessages.add(streamUserMessage);
+//
+//        ChatCompletionRequest streamChatCompletionRequest = ChatCompletionRequest.builder()
+//                .model("deepseek-v3-241226")
+//                .messages(streamMessages)
+//                .build();
+//
+//        service.streamChatCompletion(streamChatCompletionRequest)
+//                .doOnError(Throwable::printStackTrace)
+//                .blockingForEach(
+//                        choice -> {
+//                            if (choice.getChoices().size() > 0) {
+//                                System.out.print(choice.getChoices().get(0).getMessage().getContent());
+//                            }
+//                        }
+//                );
+
+        // shutdown service after all requests is finished
+        service.shutdownExecutor();
+    }
+}
+
+```
+
+项目中跑通
+
+![image-20250301115248507](images/readme.assets/image-20250301115248507.png)
+
+##### 2. 封装AI 工具类
+
+如何封装？ 上述代码的核心就是
+
+1. 获取AI请求的服务
+2. 构造消息
+3. 用AI的请求服务，根据消息发送请求，并返回结果。
+
+那我们就可以，先写一个AI的配置类，获取AI的请求服务。然后在编写工具类（传入消息，发送请求获取结果）。
+
+
+
+1. AI的请求服务配置类
+
+```java
+@Configuration
+@ConfigurationProperties(prefix = "ai")
+@Data
+public class AIConfig {
+
+    // apiKey 自动从配置文件获取 可以选择local.yaml
+    private String apiKey;
+
+    /**
+     * AI 请求服务
+     * @return
+     */
+    @Bean
+    public ArkService AIService(){
+        //
+        ConnectionPool connectionPool = new ConnectionPool(5, 1, TimeUnit.SECONDS);
+        Dispatcher dispatcher = new Dispatcher();
+        ArkService service = ArkService.builder()
+                .dispatcher(dispatcher)
+                .connectionPool(connectionPool)
+                .baseUrl("https://ark.cn-beijing.volces.com/api/v3")
+                .apiKey(apiKey).build();
+
+        return service;
+    }
+
+}
+
+```
+
+2. 编写AI 工具类
+
+```java
+@Component
+public class AIManger {
+
+    @Resource
+    private ArkService arkService;
+
+    private final String Default_Model= "deepseek-v3-241226";
+
+    /**
+     *
+     * @param systemPrompt 系统身份提示词
+     * @param userPrompt   用户提示词
+     * @param aiModel       AI模型
+     * @return
+     */
+    public String doChat(String systemPrompt,String userPrompt,String aiModel) {
+
+
+        // 构造请求消息
+        System.out.println("\n----- standard request -----");
+        final List<ChatMessage> messages = new ArrayList<>();
+        final ChatMessage systemMessage = ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(systemPrompt).build();
+        final ChatMessage userMessage = ChatMessage.builder().role(ChatMessageRole.USER).content(userPrompt).build();
+        messages.add(systemMessage);
+        messages.add(userMessage);
+
+        ChatCompletionRequest chatCompletionRequest = ChatCompletionRequest.builder()
+                .model(aiModel)
+                .messages(messages)
+                .build();
+
+        // 发起请求 并获得数据
+//        arkService.createChatCompletion(chatCompletionRequest)
+//                .getChoices()
+//                .forEach(choice -> System.out.println(choice.getMessage().getContent()));
+
+
+
+        List<ChatCompletionChoice> choices = arkService.createChatCompletion(chatCompletionRequest)
+                .getChoices();
+
+        // 检查 choices 是否为空
+        if (choices == null || choices.isEmpty()) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR);
+        }
+
+        // 将每个 choice 的 content 提取出来，拼接成一个 String
+        StringBuilder result = new StringBuilder();
+        for (ChatCompletionChoice choice : choices) {
+            result.append(choice.getMessage().getContent()).append("\n");
+        }
+
+        // 返回拼接后的结果
+        return result.toString();
+    }
+
+
+    /**
+     *
+     * @param systemPrompt 系统提示词
+     * @param userPrompt   用户提示词
+     * @return
+     */
+    public String doChat(String systemPrompt,String userPrompt) {
+
+
+        // 构造请求消息
+        System.out.println("\n----- standard request -----");
+        final List<ChatMessage> messages = new ArrayList<>();
+        final ChatMessage systemMessage = ChatMessage.builder().role(ChatMessageRole.SYSTEM).content(systemPrompt).build();
+        final ChatMessage userMessage = ChatMessage.builder().role(ChatMessageRole.USER).content(userPrompt).build();
+        messages.add(systemMessage);
+        messages.add(userMessage);
+
+        ChatCompletionRequest chatCompletionRequest = ChatCompletionRequest.builder()
+                .model(Default_Model)
+                .messages(messages)
+                .build();
+
+        // 发起请求 并获得数据
+//        arkService.createChatCompletion(chatCompletionRequest)
+//                .getChoices()
+//                .forEach(choice -> System.out.println(choice.getMessage().getContent()));
+
+
+
+        List<ChatCompletionChoice> choices = arkService.createChatCompletion(chatCompletionRequest)
+                .getChoices();
+
+        // 检查 choices 是否为空
+        if (choices == null || choices.isEmpty()) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR);
+        }
+
+        // 将每个 choice 的 content 提取出来，拼接成一个 String
+        StringBuilder result = new StringBuilder();
+        for (ChatCompletionChoice choice : choices) {
+            result.append(choice.getMessage().getContent()).append("\n");
+        }
+
+        // 返回拼接后的结果
+        return result.toString();
+    }
+
+    public String doChat(String userPrompt) {
+
+
+        // 构造请求消息
+        System.out.println("\n----- standard request -----");
+        final List<ChatMessage> messages = new ArrayList<>();
+        final ChatMessage systemMessage = ChatMessage.builder().role(ChatMessageRole.SYSTEM).content("").build();
+        final ChatMessage userMessage = ChatMessage.builder().role(ChatMessageRole.USER).content(userPrompt).build();
+        messages.add(systemMessage);
+        messages.add(userMessage);
+
+        ChatCompletionRequest chatCompletionRequest = ChatCompletionRequest.builder()
+                .model(Default_Model)
+                .messages(messages)
+                .build();
+
+        // 发起请求 并获得数据
+//        arkService.createChatCompletion(chatCompletionRequest)
+//                .getChoices()
+//                .forEach(choice -> System.out.println(choice.getMessage().getContent()));
+
+
+
+        List<ChatCompletionChoice> choices = arkService.createChatCompletion(chatCompletionRequest)
+                .getChoices();
+
+        // 检查 choices 是否为空
+        if (choices == null || choices.isEmpty()) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR);
+        }
+
+        // 将每个 choice 的 content 提取出来，拼接成一个 String
+        StringBuilder result = new StringBuilder();
+        for (ChatCompletionChoice choice : choices) {
+            result.append(choice.getMessage().getContent()).append("\n");
+        }
+
+        // 返回拼接后的结果
+        return result.toString();
+    }
+}
+```
+
+测试
+
+```java
+@SpringBootTest
+class AIMangerTest {
+
+    @Resource
+    private AIManger aiManger;
+    @Test
+    void doChat() {
+        String string = aiManger.doChat("生成 3 道 Mysql 的面试题，只生成题目");
+        System.out.println(string);
+
+    }
+
+    @Test
+    void testDoChat() {
+        String string = aiManger.doChat("当用户输入你好，你输出服务器繁忙","你好");
+        System.out.println(string);
+    }
+}
+```
+
+测试结果
+
+![image-20250301134336882](images/readme.assets/image-20250301134336882.png)
+
+
+
+tips：  我们将api-key 保存在其他的配置文件中，并且忽略掉。在启动的时候选择配置文件。避免我们开源项目时api泄露
+
+![image-20250301134520162](images/readme.assets/image-20250301134520162.png)
+
+在启动的时候，选择配置文件
+
+```shell
+--spring.profiles.active=local
+```
+
+![image-20250301132440510](images/readme.assets/image-20250301132440510.png)
+
+##### 3.  AI 生成题目
+
+直接根据参数，调用AI,就会出现上述测试的代码那样，不符合我们的要求。
+
+![image-20250301165439799](images/readme.assets/image-20250301165439799.png)
+
+我们应该优化我们的输入，使其稳定的输出我们想要的内容，我们仅仅就想要个题目。不要让AI做多余的操作。
+
+使用AI 的最佳实践，就是
+
+1. 明确输入，给出输入的实例
+2. 明确输出，给出输出的示例
+3. 表达清楚处理的业务。
+
+以下例子
+
+![image-20250301170009210](images/readme.assets/image-20250301170009210.png)
+
+![image-20250301170037988](images/readme.assets/image-20250301170037988.png)
+
+我们可以预设promt，只让用户填部分动态参数，根据我们预设的promt，生成符合要求的题目。
+
+```text
+生成 10 道 SpringBoot 的面试题，按照以下格式输出
+1. Spring Boot 的自动装配了解吗？
+2. Spring Boot 常用的注解有什么？
+3. Spring Boot 有什么优势？
+4. xxxxxx
+```
+
+启动  生成 {数量}道 {类型} 的面试题。是动态的，也就是用户输入的。
+
+
+
+开发
+
+开发接口
+
+```java
+/**
+     * AI生成题目
+     * @param num
+     * @param questionType
+     * @param user
+     * @return
+     */
+
+    boolean AIGeneratorQuestionList(int num, String questionType,User user);
+```
+
+实现类
+
+```java
+ /**
+     * AI 生成题目
+     * @param num
+     * @param questionType
+     * @param user
+     * @return
+     */
+    @Override
+    public boolean AIGeneratorQuestionList(int num, String questionType, User user) {
+
+        // 参数校验
+        ThrowUtils.throwIf(num <= 0, ErrorCode.PARAMS_ERROR, "题目数量必须大于0");
+        ThrowUtils.throwIf(StringUtils.isBlank(questionType), ErrorCode.PARAMS_ERROR, "题目类型不能为空");
+        ThrowUtils.throwIf(user == null, ErrorCode.NOT_LOGIN_ERROR);
+
+        // 定义系统prompt
+        String systemPrompt ="你是专业的程序员面试官" +"帮我生成 {数量} 道 {类型} 的面试题，按照以下格式输出\n" +
+                "1. Spring Boot 的自动装配了解吗？\n" +
+                "2. Spring Boot 常用的注解有什么？\n" +
+                "3. Spring Boot 有什么优势？\n" +
+                "4. xxxxxx";
+
+        // 用户prompt
+        String userPrompt = String.format("题目数量：%d,题目类型：%s", num, questionType);
+
+        // 调用AI服务
+
+        String resultString = aiManger.doChat(systemPrompt,userPrompt);
+
+        // 处理结果
+
+             // 使用 Hutool 的 StrUtil.split 方法按行拆分
+        List<String> lines = StrUtil.split(resultString, '\n');
+
+             // 过滤掉空行，并收集为 List<String>
+        List<String> resultList = lines.stream()
+                .filter(StrUtil::isNotBlank) // 过滤空行
+                .map(line -> line.substring(3)) // 去除前面序号
+                .collect(Collectors.toList());
+
+        List<Question> questionList = new ArrayList<>();
+        // 插入数据库（补充字段）
+        for (String string : resultList) {
+            Question question = new Question();
+            question.setTitle(string);
+            question.setUserId(user.getId());
+            ArrayList<String> taglist = new ArrayList<>();
+            taglist.add(questionType);
+            taglist.add("AI");
+            String tagsJson = JSONUtil.toJsonStr(taglist);
+            question.setTags(tagsJson);
+            questionList.add(question);
+        }
+
+        boolean save = this.saveBatch(questionList);
+        if (!save) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI生成题目失败");
+        }
+        return true;
+    }
+```
+
+接口
+
+```java
+    @PutMapping("add/AI")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Boolean> addAIQuestion(@RequestBody QuestionAddAIRequest questionAddAIRequest,HttpServletRequest request){
+
+        //参数校验
+        ThrowUtils.throwIf(questionAddAIRequest == null, ErrorCode.PARAMS_ERROR);
+        int num = questionAddAIRequest.getNum();
+        String questionType = questionAddAIRequest.getQuestionType();
+        ThrowUtils.throwIf(num <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(StringUtils.isBlank(questionType), ErrorCode.PARAMS_ERROR);
+        //获取用户
+        User loginUser = userService.getLoginUser(request);
+        ThrowUtils.throwIf(loginUser == null, ErrorCode.NOT_LOGIN_ERROR);
+
+        boolean b = questionService.AIGeneratorQuestionList(num, questionType, loginUser);
+        if(!b){
+            return ResultUtils.error(ErrorCode.SYSTEM_ERROR.getCode(), "生成失败");
+        }
+        return ResultUtils.success(b);
+
+    }
+```
+
+
+
+
+
+
+
+测试:
+
+![image-20250301183659784](images/readme.assets/image-20250301183659784.png)
+
+![image-20250301183723408](images/readme.assets/image-20250301183723408.png)
+
+
+
+##### 4. AI 生成答案
+
+上述我们只生成了标题，现在做生成内容。
+
+生成的内容要求 使用markdown语法。
+
+我们可以预设系统提示词
+
+systemPrompt
+
+```text
+你是专业的程序员，我会给你一些问题，请你解答。
+要求
+1. 使用markdown格式
+2. 先总结在详细论述。
+3. 按需给出Java实现demo
+4. 仅仅返回给我题目的回答，不要回答多余的信息。
+```
+
+
+
+
+
+测试花了 3分钟，是真的慢（可以优化成并行）。
+
+![image-20250301191600921](images/readme.assets/image-20250301191600921.png)
+
+看下显示效果，还不错。
+
+![image-20250301193956698](images/readme.assets/image-20250301193956698.png)
+
+##### 5 .可考虑的优化
+
+1. 性能优化， 并发生成题目和题解。
+2. 可观测性优化，监控+日志+警告+异常处理
+3. 成本优化
+4. 稳定性优化
+5. 响应时延优化， 异步化
+6. 代码优化， 设计模式
+7. 安全性优化，用户
+
+
+
+
+
+20：15  30s 
+
+
+
+17:30 -21:00   150s -->20s
+
+
+
+25:40
+
+性能优化
+
+上述代码中，我们是穿行，执行生成题目，生成答案的。一题一题的生成的。可以利用多线程来优化，将每次生成一道题目作为一个任务，然后异步执行，等到全部执行完毕后在插入数据库。
+
+```java
+/**
+     * AI 生成题目
+     * @param num
+     * @param questionType
+     * @param user
+     * @return
+     */
+    @Override
+    public boolean AIGeneratorQuestionList(int num, String questionType, User user) {
+
+        // 参数校验
+        ThrowUtils.throwIf(num <= 0, ErrorCode.PARAMS_ERROR, "题目数量必须大于0");
+        ThrowUtils.throwIf(StringUtils.isBlank(questionType), ErrorCode.PARAMS_ERROR, "题目类型不能为空");
+        ThrowUtils.throwIf(user == null, ErrorCode.NOT_LOGIN_ERROR);
+
+        // 定义系统prompt
+        String systemPrompt ="你是专业的程序员面试官" +"帮我生成 {数量} 道 {类型} 的面试题，按照以下格式输出\n" +
+                "1. Spring Boot 的自动装配了解吗？\n" +
+                "2. Spring Boot 常用的注解有什么？\n" +
+                "3. Spring Boot 有什么优势？\n" +
+                "4. xxxxxx";
+
+        // 用户prompt
+        String userPrompt = String.format("题目数量：%d,题目类型：%s", num, questionType);
+
+        // 调用AI服务
+
+        String resultString = aiManger.doChat(systemPrompt,userPrompt);
+
+        // 处理结果
+
+             // 使用 Hutool 的 StrUtil.split 方法按行拆分
+        List<String> lines = StrUtil.split(resultString, '\n');
+
+             // 过滤掉空行，并收集为 List<String>
+        List<String> resultList = lines.stream()
+                .filter(StrUtil::isNotBlank) // 过滤空行
+                .map(line -> line.substring(3)) // 去除前面序号
+                .collect(Collectors.toList());
+
+        ////         插入数据库（补充字段）old 不是并发执行
+//        List<Question> questionList = new ArrayList<>();
+//        for (String title : resultList) {
+//            Question question = new Question();
+//            question.setTitle(title);
+//            question.setUserId(user.getId());
+//            ArrayList<String> taglist = new ArrayList<>();
+//            taglist.add(questionType);
+//            taglist.add("AI");
+//            String tagsJson = JSONUtil.toJsonStr(taglist);
+//            question.setTags(tagsJson);
+//
+//            // 调用AI生成题目答案
+//            String answer = AIGeneratorQuestionAnswer(title);
+//
+//            question.setAnswer(answer);
+//            questionList.add(question);
+//        }
+
+        // 创建线程池
+        ExecutorService executorService = Executors.newFixedThreadPool(20);
+
+        // 并发生成题目和答案
+        List<CompletableFuture<Question>> futures = resultList.stream()
+                .map(title -> CompletableFuture.supplyAsync(() -> {
+                    Question question = new Question();
+                    question.setTitle(title);
+                    question.setUserId(user.getId());
+                    ArrayList<String> taglist = new ArrayList<>();
+                    taglist.add(questionType);
+                    taglist.add("AI");
+                    String tagsJson = JSONUtil.toJsonStr(taglist);
+                    question.setTags(tagsJson);
+
+                    // 调用AI生成题目答案
+                    String answer = AIGeneratorQuestionAnswer(title);
+                    question.setAnswer(answer);
+
+                    return question;
+                }, executorService))
+                .collect(Collectors.toList());
+
+        // 等待所有任务完成
+        CompletableFuture<Void> allFutures = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+
+        // 获取结果并保存
+        List<Question> questionList = allFutures.thenApply(v -> futures.stream()
+                .map(CompletableFuture::join)
+                .collect(Collectors.toList())).join();
+
+        // 关闭线程池
+        executorService.shutdown();
+
+        boolean save = this.saveBatch(questionList);
+        if (!save) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI生成题目失败");
+        }
+        return true;
+    }
+
+    /**
+     * AI生成题目答案
+     * 根据题目标题生成答案
+     * @param questionTitle
+     * @return
+     */
+    public String AIGeneratorQuestionAnswer(String questionTitle) {
+        // 参数校验
+        ThrowUtils.throwIf(StringUtils.isBlank(questionTitle), ErrorCode.PARAMS_ERROR, "题目不能为空");
+        // 定义系统prompt
+        String systemPrompt ="你是专业的程序员，我会给你一些问题，请你解答。\n" +
+                "要求\n" +
+                "1. 使用markdown格式\n" +
+                "2. 先总结在详细论述。\n" +
+                "3. 仅仅返回给我题目的回答，不要回答多余的信息。";
+
+        // 用户prompt
+        String userPrompt = String.format("题目：%s", questionTitle);
+
+        // 调用AI服务
+        String resultString = aiManger.doChat(systemPrompt,userPrompt);
+        return resultString;
+
+    }
+```
+
+
+
+
+
+### Cannel
+
+了解Cannel。明天实操一下。
+
+
+
+### 总结
+
+AI接入项目，引入sdk，自己在封装一下（核心也就是，AI服务请求，prompt，根据prompt发送请求，处理响应的结果）。
+
+多线程优化。
+
+Cannel，原理，伪装成Mysql 的从库，获取binlog文件，解析binlog文件。其实还是主从同步的原理，主从同步的原理，是主库数据发生变化时,会推送binlog文件给从库，从库解析binlog文件生成中继文件，然后执行中级文件，保证数据一致。
+
+binlog,文件的格式
+
+1.statement,记录的是，sql语句，优点占用空间少，缺点可能导致数据不一致，（在sql语句 执行时具有随机性或则时序性， uuid, new date(),或则由于事务的隔离级别低（RU,RC），可能会出现这莫一种情况，先开始的事务后提交，但是binlog记录的是最先提交的数据，举个例子，事务1：开启事务 delete  from A where a < 10 还未提交事务， 然后事务2： 开启事务 执行 insert into A value(5),提交事务。事务2提交事务后，事务一才提交事务，那么binlog记录的就是  insert into A value(5)  ，然后是 delete  from A where a < 10），从库获得到这个binlog，重放就会导致数据不一致。
+
+2.ROW, 记录是数据库所有的变化，假如一条sql update 更新了 1w行数据，那么row 记录的就是1w条数据的变化，相比statement只记录一条sql，占用的空间还是很大的。优点就是能做到数据完全一致。
+
+3.MIXed ,上述两者的混合，在sql有不确定因素（uuid,date）就使用row形式记录，否则就是用statement记录（RR级别才能避免数据不一致）
+
+
+
+## **day** 26
+
+### Canal
+
+[alibaba/canal: 阿里巴巴 MySQL binlog 增量订阅&消费组件](https://github.com/alibaba/canal)
+
+Canal 组件是一个基于 MySQL 数据库增量日志解析，提供增量数据订阅和消费，支持将增量数据投递到下游消费者（如 Kafka、RocketMQ 等）或者存储（如 Elasticsearch、HBase 等）的组件。
+
+总的来说，就是一个伪装更从库获取主库数据变动，将数据变动发送给下游的数据同步组件。
+
+
+
+#### MySQL主从复制原理
+
+1. 主库开启binlog 日志
+2. 主库的增删改操作，都会记录到binlog日志中。
+3. 从库感知主库binlog的binlog日志的变化，每当发生改变，启用一个IO线程去读取主库binlog文件，并记录下来存在 Relay log（中继文件）中。
+4. 最后利用Relay log 重放主库的bin log，完成数据同步。
+
+![image-20250302100558541](images/readme.assets/image-20250302100558541.png)
+
+tips: 
+
+ 	1. `bin log` 日志怎么开启?  
+ 	2. 从库怎么感知主库的binlog 变化？
+ 	3. `bin log` 日志到底是什么，怎么能重放就能完成数据同步？
+
+
+
+#### Bin log 日志 
+
+MySQL 的Binlog，它记录了所有的 DDL 和 DML语句，也就是记录了数据库中数据的变化。
+
+`bin log `的应用
+
++ 数据复制（主从同步）。
++ 数据恢复（误操作恢复、灾难恢复）。
++ 变更数据捕获（实时数据同步、数据异构）。
++ 审计和日志分析
+
+
+
+1. **如何开启binlog 日志**
+
+`MySQL 5. 7`默认情况下是不开启Binlog，因为记录Binlog日志需要消耗时间，官方给出的数据是有1%的性能损耗。最主要的是，早期阶段，那个时期往往是单机mysql。往往不需要进行数据复制，而且开启bin log 还要一些格外的配置
+
+比如，设置 `server_id`：主从复制时，每个 MySQL 实例需要唯一的 `server_id`；选择 `binlog_format`：需要根据业务需求选择合适的 binlog 格式（STATEMENT、ROW 或 MIXED）。对于不熟悉 MySQL 的用户来说，这些配置可能会增加使用难度。
+
+总的来说 `Mysql 5.7 `默认不开启`binlog `是因为以下三个方面
+
+1. 往往是单机mysql。往往不需要进行数据复制。
+2. 而且开启bin log 还要一些格外的配置，对不熟悉Mysql 的用户来说，会导致使用难度的增加。
+3. 性能消耗（在现在来看微乎其微）
+
+
+
+**MySQL 8.0 及以上版本**：binlog 默认是**开启**的。
+
+可以通过sql 查看是否开启
+
+```sql
+SHOW VARIABLES LIKE 'log_bin';  
+```
+
++ 如果返回结果为 `ON`，则表示 binlog 已开启。
++ 如果返回结果为 `OFF`，则表示 binlog 未开启。
+
+
+
+如果 binlog 未开启，你可以通过以下步骤启用它：
+
+**修改 MySQL 配置文件**
+
++ 找到 MySQL 的配置文件（通常是 `my.cnf` 或 `my.ini`）。
+
++ 在 `[mysqld]` 部分添加或修改以下配置：
+
+  ```
+  [mysqld]
+  log_bin = /var/lib/mysql/mysql-bin.log  # binlog 文件路径
+  server-id = 1                           # 服务器唯一 ID（主从复制时需要）
+  binlog_format = ROW                    # 推荐使用 ROW 模式
+  expire_logs_days = 7                   # 设置 binlog 过期时间（单位：天）
+  ```
+
++ 配置说明：
+
+  + `log_bin`：指定 binlog 文件的路径和名称。
+  + `server_id`：每个 MySQL 实例需要唯一的 ID（主从复制时必需）。
+  + `binlog_format`：binlog 的格式，推荐使用 `ROW` 模式（支持更精确的变更数据捕获）。
+  + `expire_logs_days`：设置 binlog 文件的保留时间，避免磁盘空间被占满。
+
++ 重启服务， 再次验证是否开启  ```SHOW VARIABLES LIKE 'log_bin';```
+
+
+
+ **binlog 的格式**
+
+binlog 有三种格式，可以通过 `binlog_format` 参数设置：
+
+1. **STATEMENT**：
+   + 记录 SQL 语句。
+   + 优点：日志文件较小。
+   + 缺点：某些操作（如非确定性函数）可能导致主从不一致。
+2. **ROW**（推荐）：
+   + 记录每一行数据的变更。
+   + 优点：精确记录数据变更，适用于数据同步和恢复。
+   + 缺点：日志文件较大。
+3. **MIXED**：
+   + 结合 STATEMENT 和 ROW 模式。
+   + 默认使用 STATEMENT，在某些情况下自动切换到 ROW。
+
+可以通过以下命令查看当前 binlog 格式：
+
+```sql
+SHOW VARIABLES LIKE 'binlog_format';
+```
+
+**综合上面对比，Canal 想做监控分析，选择 row 格式比较合适。** 
+
+
+
+
+
+
+
+#### canal 工作原理
+
+![image-20250302105618884](images/readme.assets/image-20250302105618884.png)
+
++ canal 模拟 MySQL slave 的交互协议，伪装自己为 MySQL slave ，向 MySQL master 发送dump 协议
++ MySQL master 收到 dump 请求，开始推送 binary log 给 slave (即 canal )
++ Canal 接收并解析 Binlog 日志，得到变更的数据，执行后续逻辑
+
+
+
+#### Canal实战
+
+1.准备环境
+
+1. 创建一个 Canal-demo表
+
+![image-20250302110301849](images/readme.assets/image-20250302110301849.png)
+
+2.  开启bin log 日志  my.ini
+
+```ini
+[mysqld]
+log-bin="LAPTOP-O4ONRGLK-bin"  # binlog 文件路径
+server-id = 1                           # 服务器唯一 ID（主从复制时需要）
+binlog_format = ROW                    # 推荐使用 ROW 模式
+expire_logs_days = 7                   # 设置 binlog 过期时间（单位：天）
+```
+
+重启mysql 服务 并 查看是否开启 ```show variables like 'log_bin'```
+
+
+
+tips： mysql 启动错误，排查，可以根据错误日志，交给gpt。
+
+![image-20250302111917308](images/readme.assets/image-20250302111917308.png)
+
+
+
+3. 安装Canal
+
+[Releases · alibaba/canal](https://github.com/alibaba/canal/releases/tag/canal-1.1.8)
+
+![image-20250302113533204](images/readme.assets/image-20250302113533204.png)
+
+**修改canal.properties的配置**
+
+```yaml
+canal.port = 11111
+# tcp, kafka, rocketMQ, rabbitMQ, pulsarMQ
+canal.serverMode = tcp
+ 
+canal.destinations = example
+```
+
+
+
+canal.port：默认端口 11111
+
+canal.serverMode：服务模式，tcp 表示输入客户端，kafka, rocketMQ, rabbitMQ, pulsarMQ 表示输入MQ.
+
+canal.destinations：canal能可以收集多个MySQL数据库数据，每个MySQL数据库都有独立的配置文件控制。具体配置规则： conf/目录下，使用文件夹放置，文件夹名代表一个MySQL实例。canal.destinations用于配置需要监控数据的数据库。如果是多个，使用,隔开。建议直接复制example，然后重命名配置不同的Mysql实例。
+
+ **修改Canel 下MySQL实例配置文件instance.properties**
+
+```yaml
+canal.instance.mysql.slaveId=20
+ 
+# position info
+canal.instance.master.address=127.0.0.1:3306
+ 
+# username/password
+canal.instance.dbUsername=root
+canal.instance.dbPassword=admin
+```
+
+* canal.instance.mysql.slaveId：伪装成 mysql从库，数据库服务的id。
+
+
+
+启动 bin/startup.bat
+
+ 启动脚本错误
+
+```text
+start cmd :  java   -Xms128m -Xmx512m -XX:PermSize=128m  -Djava.awt.headless=true -Djava.net.preferIPv4Stack=true -Dapplication.codeset=UTF-8 -Dfile.encoding=UTF-8  -server -Xdebug -Xnoagent -Djava.compiler=NONE -Xrunjdwp:transport=dt_socket,address=9099,server=y,suspend=n  -DappName=otter-canal -Dlogback.configurationFile="D:\development_tool\canal-1.1.8\bin\\..\conf\logback.xml" -Dcanal.conf="D:\development_tool\canal-1.1.8\bin\\..\conf\canal.properties" -classpath "D:\development_tool\canal-1.1.8\bin\\..\conf\..\lib\*;D:\development_tool\canal-1.1.8\bin\\..\conf" java   -Xms128m -Xmx512m -XX:PermSize=128m  -Djava.awt.headless=true -Djava.net.preferIPv4Stack=true -Dapplication.codeset=UTF-8 -Dfile.encoding=UTF-8  -server -Xdebug -Xnoagent -Djava.compiler=NONE -Xrunjdwp:transport=dt_socket,address=9099,server=y,suspend=n  -DappName=otter-canal -Dlogback.configurationFile="D:\development_tool\canal-1.1.8\bin\\..\conf\logback.xml" -Dcanal.conf="D:\development_tool\canal-1.1.8\bin\\..\conf\canal.properties" -classpath "D:\development_tool\canal-1.1.8\bin\\..\conf\..\lib\*;D:\development_tool\canal-1.1.8\bin\\..\conf" com.alibaba.otter.canal.deployer.CanalLauncher
+Unrecognized VM option 'PermSize=128m'
+Error: Could not create the Java Virtual Machine.
+Error: A fatal exception has occurred. Program will exit.
+请按任意键继续. . .
+
+```
+
+原因是 启动脚本还是使用的jdk 8 的参数。但是我的是jdk 17,
+
+把参数移除，不写，或者使用原空间替代。
+
+![image-20250302122946575](images/readme.assets/image-20250302122946575.png)
+
+
+
+编写java代码
+
+创建maven项目
+
+引入依赖
+
+```xml
+  <dependency>
+            <groupId>com.alibaba.otter</groupId>
+            <artifactId>canal.client</artifactId>
+            <version>1.1.0</version>
+        </dependency>
+```
+
+
+
+
+编写测试类
+
+```java
+package com.ls;
+
+
+
+import com.alibaba.otter.canal.client.CanalConnector;
+import com.alibaba.otter.canal.client.CanalConnectors;
+import com.alibaba.otter.canal.protocol.CanalEntry;
+import com.alibaba.otter.canal.protocol.Message;
+import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
+
+import java.net.InetSocketAddress;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+
+
+public class HelloCanal {
+    public static void main(String[] args) throws InvalidProtocolBufferException {
+        //1.获取 canal 连接对象
+        CanalConnector canalConnector = CanalConnectors.newSingleConnector(new InetSocketAddress("localhost", 11111), "canal-demo", "", "");
+        while (true) {
+            //2.获取连接
+            canalConnector.connect();
+            //3.指定要监控的数据库
+            canalConnector.subscribe("canal-demo.*");
+            //4.获取 Message
+            Message message = canalConnector.get(100);
+            List<CanalEntry.Entry> entries = message.getEntries();
+            if (entries.size() <= 0) {
+                System.out.println("没有数据，休息一会");
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            } else {
+                for (CanalEntry.Entry entry : entries) {
+                    // 获取表名
+                    String tableName = entry.getHeader().getTableName();
+                    //  Entry 类型
+                    CanalEntry.EntryType entryType = entry.getEntryType();
+                    //  判断 entryType 是否为 ROWDATA
+                    if (CanalEntry.EntryType.ROWDATA.equals(entryType)) {
+                        //  序列化数据
+                        ByteString storeValue = entry.getStoreValue();
+                        //  反序列化
+                        CanalEntry.RowChange rowChange = CanalEntry.RowChange.parseFrom(storeValue);
+                        // 获取事件类型
+                        CanalEntry.EventType eventType = rowChange.getEventType();
+                        // 获取具体的数据
+                        List<CanalEntry.RowData> rowDatasList = rowChange.getRowDatasList();
+                        // 遍历并打印数据
+                        for (CanalEntry.RowData rowData : rowDatasList) {
+                            List<CanalEntry.Column> beforeColumnsList = rowData.getBeforeColumnsList();
+                            Map<String, Object> bMap = new HashMap<>();
+                            for (CanalEntry.Column column : beforeColumnsList) {
+                                bMap.put(column.getName(), column.getValue());
+                            }
+                            Map<String, Object> afMap = new HashMap<>();
+                            List<CanalEntry.Column> afterColumnsList = rowData.getAfterColumnsList();
+                            for (CanalEntry.Column column : afterColumnsList) {
+                                afMap.put(column.getName(), column.getValue());
+                            }
+                            System.out.println("表名:" + tableName + ",操作类型:" + eventType);
+                            System.out.println("改前:" + bMap );
+                            System.out.println("改后:" + afMap );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+}
+
+```
+
+
+
+* 核心就是这个，获取canal连接对象，ip,port , 伪造的从节点， 账号，密码
+
+```java
+   CanalConnector canalConnector = CanalConnectors.newSingleConnector(new InetSocketAddress("localhost", 11111), "canal-demo", "", "");
+
+```
+
+* 指定要监控的数据库（主库）
+
+```java
+    //3.指定要监控的数据库
+            canalConnector.subscribe("canal-demo.*");
+```
+
+
+
+  当我们修改数据库
+
+  ![image-20250302125009310](images/readme.assets/image-20250302125009310.png)
+
+监测成功。
+
+
+
+
+
+>  简答总结一下
+
+原本一小时的计划，学习了一上午。
+
+总结一下：
+
+*  Msql的主从复制，核心是开启binlog文件，当数据发生变化后，binlog会记录数据的变化，从库获取到binlog 重放binlog保证同步，这里还有很多问题比如 binlog记录的是什么，binlog的用途有哪些（复制数据，恢复数据），怎么开启binlog。
+*  Canal 的工作原理，伪装成从库，请求主库。解析binlog日志，获取数据变化。
+*  Canal 的实战，下载，配置（port，服务模型（TCP, MQ）.指定伪装的从库，配置伪装的从库）
+
+
+
+
+
+### VUE
+
+一坨，感觉不行，要重新学，js,ts都不熟悉。
+
+前端 js,ts,vue,react.
+
+争取每天学1小时前端。
+
+在不懂的情况下，真是太费时间了。
+
+
+
+### JavaScript
+
+#### 入门
+
+js就是脚本文件，可以动态的修改html的内容。
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>js入门</title>
+</head>
+<body>
+
+    <p id="p1">11111</p>
+    
+</body>
+</html>
+```
+
+修改  1111 --> 2222
+
+![image-20250302214608054](images/readme.assets/image-20250302214608054.png)
+
+代码
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>js入门</title>
+</head>
+<body>
+
+    <p id="p1">11111</p>
+    <script>
+        document.getElementById("p1").innerText="3333"
+    </script>
+</body>
+</html>
+```
+
+#### 变量与数据类型
+
+变量声明
+
+* let
+
+```js
+let 变量名 = 值;
+
+let a = 10;
+a  = 200;
+```
+
+let 声明的变量可以多次被赋值
+
+* const
+
+```html
+const b =  100;
+b = 500; // error  不能再次赋值
+```
+
+![image-20250302215837583](images/readme.assets/image-20250302215837583.png)
+
+```javascript
+const c = [1,2,3]
+c[2] = 4  // 可以赋值，常量就是地址不能边
+```
+
+![image-20250302220121235](images/readme.assets/image-20250302220121235.png)
+
+* var
+
+var 可以被多次赋值，能用let 就用let。
+
+基本类型
+
+* undefined 和null
+
+**函数没有返回值** 就是 undefined,或者打印**对象**不存在的属性，或者声明的变量没有赋值，要是打印不存在的变量就报错
+
+![image-20250302220746933](images/readme.assets/image-20250302220746933.png)
+
+undefine 都是js才产生的，null是我们自己设置的（后端响应）。
+
+
+
+3）string
+
+```html
+<a href="https://www.baidu.com">百度</a>
+```
+
+用java和 JavaScript 串来表示上述字符串
+
+java
+
+```java
+String s1 = "<a href=\"https://www.baidu.com\">百度</a>"   //转义
+  String s2 = """
+        String s1 = "<a href="https://www.baidu.com">百度</a>"
+        """; // 8以上的才支持
+```
+
+![image-20250302221824121](images/readme.assets/image-20250302221824121.png)
+
+
+
+JavaScript
+
+```javascript
+let s1 = '<a href="https://www.baidu.com">百度</a>'
+
+let s3 =`<a href="https://www.baidu.com">百度</a>`
+```
+
+![image-20250302222124500](images/readme.assets/image-20250302222124500.png)
+
+
+
+模板字符串
+
+需求拼接 URI的请求参数
+
+```txt
+/test?name=li&age=20
+/test?name=liu&age=21
+```
+
+传统方法拼
+
+```javascript
+let name = "li"
+let age = 20
+let uri = "/test?name=" +name + "&age=" +age
+```
+
+![image-20250302222616957](images/readme.assets/image-20250302222616957.png)
+
+模板字符串拼接
+
+```javascript
+let name = "li"
+let age = 20
+
+let uri = `/test?name=${name}&age=${age}`
+```
+
+![image-20250302222812258](images/readme.assets/image-20250302222812258.png)
+
+
+
+4） number 和bigint
+
+ number 浮点数
+
+![image-20250302223523088](images/readme.assets/image-20250302223523088.png)
+
+类型转换
+
+```javascript
+parseInt(10.0000) #10
+
+parseInt(10.05) #10
+
+parseInt(10.05) /3 #3.3333333333333335
+
+
+parseInt("10.0000") #10
+"50" -0
+50
+"10.5"-0
+10.5
+("10.5"-0) /3
+3.5
+
+parseInt("ssada") #NaN
+```
+
+
+
+bigint 正数
+
+数字+n 例如 10n
+
+![image-20250302224410078](images/readme.assets/image-20250302224410078.png)
+
+
+
+6)boolean
+
+```javascript
+let a = 1;
+if(a){
+    console.log("进入了判断")
+}
+```
+
+![image-20250302224827782](images/readme.assets/image-20250302224827782.png)
+
+
+
+java就不行
+
+![image-20250302224801706](images/readme.assets/image-20250302224801706.png)
+
+* Truthy
+* Falsy
+
+当需要条件判断时，这个值，被当作true 的值归为Truthy，否则Falsy
+
+
+
+Falsy
+
+* false
+* nullish(null,undefined)
+* 0 ,0n,Nan
+* "",'',Nan
+
+
+
+#### 对象类型
+
+1）Function
+
+定义
+
+```javascript
+function 函数名（参数）{
+    // 函数体
+    return 结果；
+}
+```
+
+
+
+例子
+
+```javascript
+function add(a,b){
+    return a +b;
+}
+```
+
+函数调用
+
+```函数名（实参）```
+
+
+
+![image-20250302225704316](images/readme.assets/image-20250302225704316.png)
+
+和Java相比，定义函数的时候，不需要定义类型，当然参数也可以是任意类型。
+
+在调用的时候，参数的类型不固定，甚至数量也不固定
+
+![image-20250302225953906](images/readme.assets/image-20250302225953906.png)
+
+* 默认参数
+
+Java中默认参数
+
+@RequestionParam(defaultValue="1")
+
+js
+
+```javascript
+function pagenation(page = 1,size = 10){
+    console.log(page,size)
+}
+```
+
+![image-20250302230335526](images/readme.assets/image-20250302230335526.png)
+
+
+
+## 总结
+
+主从同步的原理清清楚楚，binlog的内容，使用。
+
+Canal的工作原理，下载，配置canal（启动脚本有问题，修改一下jdk8），Canal的配置（port,servemode,destinations）,然后配置destinations的配置文件（伪装成从节点，slaveId，address，dbUsername，dbPassword） Canal的API
+
+Vue 依托，浪费时间，要尽快搭建前端体系。
+
+JavaScript,定义（let,const,var）基本类型（string,number.bigint,boolean），对象类型（Function 函数与Java函数的区别，不要求参数类型和返回值，在定义的时候可以传任意参数，任意类型，甚至任意个数。默认参数）。
+
+深刻意识到前端的不足，但是中心还是绝对要放在后端，只能说每天最少学1h前端。尽量快速搭建起来前端的体系知识。后端coding少了。
+
+优化
+
+* 每日一定 lc mysql
+* 后端coding （目前没什么内容，睡觉想想）
+* 前端体系尽快搭建 最少一天1h前端。
+* 八股今天有没看，但是产出了mysql同步相互管理的内容，不过还是要看八股。
+
+
+
+
+
+## Day 27
+
+
+### 评论页面
+
+在评论页面上，加一个评论框，和发送按钮
+
+![image-20250303110904803](images/readme.assets/image-20250303110904803.png)
+
+在写好的评论组件中添加。
+
+axios 请求
+
+```ts
+/** 新增评论 请求类型*/
+interface CommentsAddRequest {
+  /**
+   * 题目 ID
+   */
+  questionId: number;
+
+  /**
+   * 评论内容
+   */
+  content: string;
+}
+
+/** 新增评论 */
+export async function addCommentUsingPut(
+  commentsAddRequest: CommentsAddRequest,
+  options?: { [key: string]: any },
+) {
+  return request<API.BaseResponseLong_>('/api/comments/add', {
+    method: 'PUT', // 使用 PUT 方法
+    data: commentsAddRequest, // 请求体数据
+    ...(options || {}), // 其他可选配置
+  });
+}
+```
+
+点击发送，发送axios请求
+
+![image-20250303114902867](images/readme.assets/image-20250303114902867.png)
+
+明明刚刚还没问题，发送了两条评论，然后有错了。fk
+
+回滚了，还报错，fk
+
+```text
+ ⨯ Error: Attempted to call error() from the server but error is on the client. It's not possible to invoke a client function from the server, it can only be rendered as a Component or passed to props of a Client Component.
+    at HomePage (./src/app/page.tsx:72:95)
+```
+
+重启了，前后端，不报错了
+
+
+
+
+
+有一个bug，题目id都是1
+
+![image-20250303131737477](images/readme.assets/image-20250303131737477.png)
+
+![image-20250303131837109](images/readme.assets/image-20250303131837109.png)
+
+写死了值，我们要根据页面获取，userid，questionid.
+
+不清楚有没有全局共享变量 userid， 不用也可以把，后端根据session去查。
+
+questionId,可以获取uri，然后获得到questionid.试试看把
+
+
+
+确实可以
+
+![image-20250303132513757](images/readme.assets/image-20250303132513757.png)
+
+新增评论实现。
+
+获取评论列表失效了，我之前在questionpage中写的请求，还是转到comment组件中请求吧。
+
+
+
+又遇到前几天的错误，卡在了这个，之前我是想做分页查询评论，但是调用那个函数就出现这个错误。
+
+![image-20250303142841297](images/readme.assets/image-20250303142841297.png)
+
+经过排查，好像是函数的返回值，和接受类型不一致，还真是，从返回值里面去除data就行了。
+
+![image-20250303143210322](images/readme.assets/image-20250303143210322.png)
+
+做个简短的总结：
+
+* 如何实现，发送评论框的
+
+  直接将我们写好的组件（之前只有评论），交给AI修改新增评论框。
+
+* 如何实现点击按钮，发送请求到数据库的
+
+  给按钮绑定事件，在事件中调用axios请求。axios怎么写的，接口给AI。
+
+* 如何实现查询评论列表的，之前写好了axios请求，但是在其他页面（题目页面调用请求，感觉不好，不如直接在评论组件中去调用）
+
+### Todo
+
+1. 删除评论功能。
+2. 分页查询功能。
+
+
+
+### 评论删除功能
+
+在评论上加一个删除的小按钮，点击按钮，发送axios请求删除。
+
+大概逻辑就是，在每条评论后面，加一个删除按钮，并绑定单机事件，单击事件，调用axios请求。
+
+至于axios请求，就将后端的接口，给AI，以及实体的请求代码。
+
+![image-20250303151836999](images/readme.assets/image-20250303151836999.png)
+
+成功实现。
+
+测试：删除自己的√，删除别人的（不能删除）×，管理员删除别人的√
+
+
+
+
+
+### 点赞功能
+
+半个小时速度
+
+先实现后端.
+
+评论表
+
+添加个good 字段，用户点赞排序
+
+```sql
+-- auto-generated definition
+create table comments
+(
+    commentId  bigint auto_increment comment 'id'
+        primary key,
+    userId     bigint                             not null comment '用户id',
+    questionId bigint                             not null comment '题目id',
+    content    text                               not null comment '评论内容',
+    createTime datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete   tinyint  default 0                 not null comment '是否删除',
+    good       int      default 0                 null comment '点赞量'
+)
+    comment '评论' collate = utf8mb4_unicode_ci;
+```
+
+业务逻辑，一人一个评论只能点赞一次，怎么实现？
+
+新增点赞表
+
+```sql
+CREATE TABLE comment_likes (
+    id BIGINT AUTO_INCREMENT COMMENT '主键' PRIMARY KEY,
+    commentId BIGINT NOT NULL COMMENT '评论ID',
+    userId BIGINT NOT NULL COMMENT '用户ID',
+    createTime DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL COMMENT '创建时间',
+    updateTime DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    isDelete TINYINT DEFAULT 0 NOT NULL COMMENT '是否删除',
+    UNIQUE KEY uk_comment_user (commentId, userId) -- 唯一约束，确保一个用户对一个评论只能点赞一次
+) COMMENT '评论点赞表' COLLATE = utf8mb4_unicode_ci;
+```
+
+逻辑，就是用一个表存放关系，利用唯一约束来添加，发送点赞请求，会先根据userId和commentId，来查询点赞记录表，存在就失败，不存在就加入，同时，评论表good 字段++。加上事务。
+
+如下实现
+
+service 接口
+
+```java
+ BaseResponse<Boolean> likeComment(long commentId, long userId);
+```
+
+实现类
+
+```java
+@Service
+@Transactional
+public class CommentLikesServiceImpl extends ServiceImpl<CommentLikesMapper, CommentLikes>
+    implements CommentLikesService{
+
+
+    @Resource
+    private CommentsService commentsService;
+
+    /**
+     * 一人只能点赞一次
+     * @param commentId
+     * @param userId
+     * @return
+     */
+    @Override
+    public BaseResponse<Boolean> likeComment(long commentId, long userId) {
+        //参数校验
+        ThrowUtils.throwIf(commentId <= 0, ErrorCode.NOT_FOUND_ERROR);
+        ThrowUtils.throwIf(userId <= 0, ErrorCode.NOT_LOGIN_ERROR);
+
+        //查询点赞记录
+        // select count(*) from CommentLikes where commentId = commentId and userId = userId
+        LambdaQueryWrapper<CommentLikes> lambdaQueryWrapper = new LambdaQueryWrapper<>();
+        lambdaQueryWrapper.eq(CommentLikes::getCommentId, commentId)
+                .eq(CommentLikes::getUserId, userId);
+        CommentLikes commentLikes = this.getOne(lambdaQueryWrapper);
+        if (commentLikes != null) {
+            //已经点赞过
+            return ResultUtils.error(ErrorCode.OPERATION_ERROR,"已经点过赞了");
+        }
+        //插入点赞记录
+        commentLikes = new CommentLikes();
+        commentLikes.setCommentId(commentId);
+        commentLikes.setUserId(userId);
+        boolean save = save(commentLikes);
+        if(!save){
+            throw new BusinessException(ErrorCode.OPERATION_ERROR);
+        }
+
+        //并且 评论表点赞加1
+        LambdaUpdateWrapper<Comments> lambdaUpdateWrapper = new LambdaUpdateWrapper<>();
+
+
+        // update comments set good = good + 1 where id = commentId
+        lambdaUpdateWrapper
+                .eq(Comments::getCommentId, commentId)
+                .setSql("good = good + 1");
+
+        boolean update = commentsService.update(lambdaUpdateWrapper);
+        if (!update) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR);
+        }
+
+        return ResultUtils.success(true);
+    }
+}
+
+
+
+```
+
+接口
+
+```java
+@RestController
+@RequestMapping("/commentsLike")
+public class CommentLikeController {
+
+
+    @Resource
+    private CommentLikesService commentLikesService;
+    
+    @Resource
+    private UserService userService;
+
+
+    /**
+     * 新增点赞
+     * @param
+     */
+    @PutMapping("/add")
+    public BaseResponse<Boolean> addComment(@RequestBody  long commentId , HttpServletRequest request){
+
+        User loginUser = userService.getLoginUser(request);
+        ThrowUtils.throwIf(loginUser == null, ErrorCode.NOT_LOGIN_ERROR);
+
+        ThrowUtils.throwIf(commentId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(loginUser.getId() <= 0, ErrorCode.PARAMS_ERROR);
+
+
+        return commentLikesService.likeComment(commentId,loginUser.getId());
+    }
+
+
+
+}
+
+```
+
+测试 通过。
+
+tips： 数据库，加了一个字段，我们后端的实体也要加，前端的实体类也要加（我还没加）。
+
+
+
+### 总结
+
+前端写了多了，如何用AI写前端，在现有的基础上页面，我们尽量的不依赖与其他文件，尽管不优雅，能跑就行。就让AI写，变写边改，从中学习知识。大题开发前端的逻辑，就是开发页面，绑定事件，发送axios请求，稍微处理一些数据的逻辑。
+
+从中学到的知识，页面需求描述清楚，不断的优化，axios请求，要给出后端的接口包括依赖的请求体，最好给出一些写好的axios示例。
+
+点赞功能。
+
+今天没有系统的学前端的知识， 应该在公司学的，一天写俩页面，效率优点低了，要学会拒绝别人，只要不是学习的事情，就说自己有需求要写。
+
+明确一下任务
+
+1.继续开发页面（最少一个）
+
+2.前端系统学习（1h）
+
+3.后端业务设计以及实现（毕设先不加功能了，先写好剩余需要开发的前端（点赞评论，分页获取评论，AI生成题目，在添加一个审核？）
+
+4.sql
+
+5.八股
+
+6.新知识
+
+
+
+
+
+
+
+
+
